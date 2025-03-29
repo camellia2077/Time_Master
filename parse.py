@@ -181,8 +181,16 @@ def query_day(conn, date):
     tree = defaultdict(lambda: defaultdict(int))
     for project_path, duration in records:
         parts = project_path.split('_')
-        current = tree['STUDY'] if parts[0] == 'study' else tree[parts[0].upper()]
-        for part in parts:
+        if not parts:
+            continue
+        
+        # 处理顶层项目
+        top_level = 'STUDY' if parts[0].lower() == 'study' else parts[0].upper()
+        tree[top_level]['duration'] += duration
+        
+        # 处理子层级
+        current = tree[top_level]
+        for part in parts[1:]:
             if part not in current:
                 current[part] = defaultdict(int)
             current[part]['duration'] += duration
@@ -243,8 +251,16 @@ def query_period(conn, days):
     tree = defaultdict(lambda: defaultdict(int))
     for project_path, duration in records:
         parts = project_path.split('_')
-        current = tree['STUDY'] if parts[0] == 'study' else tree[parts[0].upper()]
-        for part in parts:
+        if not parts:
+            continue
+        
+        # 处理顶层项目
+        top_level = 'STUDY' if parts[0].lower() == 'study' else parts[0].upper()
+        tree[top_level]['duration'] += duration
+        
+        # 处理子层级
+        current = tree[top_level]
+        for part in parts[1:]:
             if part not in current:
                 current[part] = defaultdict(int)
             current[part]['duration'] += duration
