@@ -105,18 +105,18 @@ def generate_heatmap(conn, year, output_file):
     heatmap_data = []
     # 前置空白天
     for _ in range(front_empty_days):
-        heatmap_data.append((None, 'empty'))
+        heatmap_data.append((None, 'empty', 0))
     # 年份内的天
     current_date = start_date
     while current_date <= end_date:
         date_str = current_date.strftime("%Y%m%d")
         study_time = study_times.get(date_str, 0)
         color = get_color(study_time)
-        heatmap_data.append((current_date, color))
+        heatmap_data.append((current_date, color, study_time))
         current_date += timedelta(days=1)
     # 后置空白天
     for _ in range(back_empty_days):
-        heatmap_data.append((None, 'empty'))
+        heatmap_data.append((None, 'empty', 0))
     
     # SVG 设置
     cell_size = 12  # 方块大小：12x12 像素
@@ -143,7 +143,7 @@ def generate_heatmap(conn, year, output_file):
     months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     month_positions = []
     current_month = start_date.month
-    for i, (date, _) in enumerate(heatmap_data):
+    for i, (date, _, _) in enumerate(heatmap_data):
         if date and date.month != current_month:
             month_positions.append((current_month, i // 7))
             current_month = date.month
@@ -154,15 +154,20 @@ def generate_heatmap(conn, year, output_file):
         svg.append(f'<text x="{x}" y="{margin_top - 5}" font-size="10" text-anchor="middle">{month}</text>')
     
     # 添加方块
-    for i, (date, color) in enumerate(heatmap_data):
-        if color != 'empty':
+    for i, (date, color, study_time) in enumerate(heatmap_data):
+        if date is not None:  # 只为实际日期生成方块
             # 计算方块位置
             week_index = i // 7  # 第几周
             day_index = i % 7   # 星期几（0=周日, ..., 6=周六）
             x = margin_left + week_index * (cell_size + spacing)
             y = margin_top + day_index * (cell_size + spacing)
-            # 添加矩形方块
-            svg.append(f'<rect width="{cell_size}" height="{cell_size}" x="{x}" y="{y}" fill="{color}" rx="2" ry="2" title="{date.strftime("%Y-%m-%d")}"/>')
+            # 格式化学习时间
+            duration_str = format_duration(study_time)
+            title_text = f"{date.strftime('%Y-%m-%d')}: {duration_str}"
+            # 添加矩形方块和 <title> 提示
+            svg.append(f'<rect width="{cell_size}" height="{cell_size}" x="{x}" y="{y}" fill="{color}" rx="2" ry="2">')
+            svg.append(f'    <title>{title_text}</title>')
+            svg.append(f'</rect>')
     
     svg.append('</svg>')
     
