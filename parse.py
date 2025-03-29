@@ -123,20 +123,47 @@ def generate_heatmap(conn, year, output_file):
     spacing = 3   # 方块间距：3 像素
     weeks = 53    # 列数：53 周
     rows = 7      # 行数：7 天
-    width = weeks * (cell_size + spacing)  # 宽度：795 像素
-    height = rows * (cell_size + spacing)  # 高度：105 像素
+    
+    # 调整 SVG 尺寸以容纳标记
+    margin_top = 20  # 顶部留白（用于月份标记）
+    margin_left = 30  # 左侧留白（用于星期标记）
+    width = margin_left + weeks * (cell_size + spacing)
+    height = margin_top + rows * (cell_size + spacing)
     
     # 生成 SVG
     svg = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">']
+    
+    # 添加星期标记（纵坐标）
+    days_of_week = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    for i, day in enumerate(days_of_week):
+        y = margin_top + i * (cell_size + spacing) + cell_size / 2
+        svg.append(f'<text x="0" y="{y}" font-size="10" alignment-baseline="middle">{day}</text>')
+    
+    # 添加月份标记（横坐标）
+    months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    month_positions = []
+    current_month = start_date.month
+    for i, (date, _) in enumerate(heatmap_data):
+        if date and date.month != current_month:
+            month_positions.append((current_month, i // 7))
+            current_month = date.month
+    month_positions.append((current_month, len(heatmap_data) // 7))
+    
+    for month, week_index in month_positions:
+        x = margin_left + week_index * (cell_size + spacing)
+        svg.append(f'<text x="{x}" y="{margin_top - 5}" font-size="10" text-anchor="middle">{month}</text>')
+    
+    # 添加方块
     for i, (date, color) in enumerate(heatmap_data):
         if color != 'empty':
             # 计算方块位置
             week_index = i // 7  # 第几周
             day_index = i % 7   # 星期几（0=周日, ..., 6=周六）
-            x = week_index * (cell_size + spacing)
-            y = day_index * (cell_size + spacing)
+            x = margin_left + week_index * (cell_size + spacing)
+            y = margin_top + day_index * (cell_size + spacing)
             # 添加矩形方块
             svg.append(f'<rect width="{cell_size}" height="{cell_size}" x="{x}" y="{y}" fill="{color}" rx="2" ry="2" title="{date.strftime("%Y-%m-%d")}"/>')
+    
     svg.append('</svg>')
     
     # 生成 HTML 文件
