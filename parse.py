@@ -281,6 +281,43 @@ def query_period(conn, days):
         total_duration = subtree['duration']
         print(f"\n{top_level}: {format_duration(total_duration)}")
         print('\n'.join(print_subtree(subtree, 1)))
+def query_day_raw(conn, date):
+    cursor = conn.cursor()
+    
+    # 查询基础信息
+    cursor.execute('''
+        SELECT date, status, getup_time, remark 
+        FROM days 
+        WHERE date = ?
+    ''', (date,))
+    day_data = cursor.fetchone()
+    
+    if not day_data:
+        print(f"日期 {date} 无记录")
+        return
+    
+    db_date, status, getup, remark = day_data
+    
+    # 查询时间记录
+    cursor.execute('''
+        SELECT start, end, project_path 
+        FROM time_records 
+        WHERE date = ? 
+        ORDER BY start
+    ''', (date,))
+    records = cursor.fetchall()
+    
+    # 构建原始格式输出
+    output = []
+    output.append(f"Date:{db_date}")
+    output.append(f"Status:{status}")
+    output.append(f"Getup:{getup}")
+    output.append(f"Remark:{remark}")
+    
+    for start, end, project in records:
+        output.append(f"{start}~{end}{project}")
+    
+    print('\n'.join(output))
 def main():
     conn = init_db()
     
@@ -290,7 +327,8 @@ def main():
         print("2. 查询最近7天")
         print("3. 查询最近14天")
         print("4. 查询最近30天")
-        print("5. 退出")
+        print("5. 输出某天原始数据")  # 新增选项
+        print("6. 退出")            # 原选项5改为6
         choice = input("请选择操作：")
         
         if choice == '0':
@@ -308,10 +346,16 @@ def main():
         elif choice in ('2', '3', '4'):
             days_map = {'2':7, '3':14, '4':30}
             query_period(conn, days_map[choice])
-        elif choice == '5':
+        elif choice == '5':  # 新增选项处理
+            date = input("请输入日期(YYYYMMDD):")
+            if re.match(r'^\d{8}$', date):
+                query_day_raw(conn, date)
+            else:
+                print("日期格式错误")
+        elif choice == '6':  # 退出选项
             break
         else:
-            print("无效输入")
+            print("请输入数字")
     
     conn.close()
 
