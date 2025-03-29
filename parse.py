@@ -20,7 +20,7 @@ def init_db():
             date TEXT,
             start TEXT,
             end TEXT,
-            child TEXT,
+            project_path TEXT,
             duration INTEGER,
             PRIMARY KEY(date, start)
         );
@@ -38,32 +38,20 @@ def init_db():
         );
     ''')
     
-    parent_child_map = {
-        'study_computer': 'STUDY',
-        'study_english': 'STUDY',
-        'study_math': 'STUDY', 
-        'break_period': 'BREAK',
-        'break_allday': 'BREAK',
-        'rest_masturbation': 'REST',
-        'rest_short': 'REST',
-        'exercise_default': 'EXERCISE',
-        'exercise_cardio': 'EXERCISE',
-        'exercise_anaerobic': 'EXERCISE',
-        'sleep_nap': 'SLEEP',
-        'sleep_night': 'SLEEP',
-        'RECREATION_game': 'RECREATION',
-        'RECREATION_bilibili': 'RECREATION',
-        'RECREATION_zhihu': 'RECREATION',
-        'RECREATION_douyin': 'RECREATION',
-        'RECREATION_weibo': 'RECREATION',
-        'RECREATION_other': 'RECREATION',
-        'other_learndriving': 'OTHER',
-        'meal_short': 'MEAL',
-        'meal_medium': 'MEAL',
-        'meal_long': 'MEAL'
+    # Predefined top-level mappings (no longer hardcoding all combinations)
+    top_level_map = {
+        'study': 'STUDY',
+        'break': 'BREAK',
+        'rest': 'REST',
+        'exercise': 'EXERCISE',
+        'sleep': 'SLEEP',
+        'recreation': 'RECREATION',
+        'other': 'OTHER',
+        'meal': 'MEAL'
     }
     
-    for child, parent in parent_child_map.items():
+    # Insert only top-level mappings; sub-levels will be built dynamically
+    for child, parent in top_level_map.items():
         cursor.execute('''
             INSERT OR IGNORE INTO parent_child (child, parent)
             VALUES (?, ?)
@@ -103,25 +91,44 @@ def parse_file(conn, filepath):
                     day_info['getup_time'] = line[6:].strip()
                 
                 elif '~' in line:
-                    # 增强型时间解析
                     match = re.match(r'^(\d+:\d+)~(\d+:\d+)\s*([a-zA-Z_]+)', line)
                     if not match:
                         print(f"格式错误在 {os.path.basename(filepath)} 第{line_num}行: {line}")
                         continue
                         
-                    start, end, activity = match.groups()
-                    activity = activity.lower().replace('stduy', 'study')
+                    start, end, project_path = match.groups()
+                    project_path = project_path.lower().replace('stduy', 'study')
 
                     start_sec = time_to_seconds(start)
                     end_sec = time_to_seconds(end)
                     if end_sec < start_sec:
-                        end_sec += 86400  # 处理跨午夜
+                        end_sec += 86400  # Handle midnight crossover
                     duration = end_sec - start_sec
 
+                    # Store the full project path
                     cursor.execute('''
                         INSERT OR REPLACE INTO time_records 
                         VALUES (?, ?, ?, ?, ?)
-                    ''', (current_date, start, end, activity, duration))
+                    ''', (current_date, start, end, project_path, duration))
+
+                    # Dynamically build hierarchy
+                    parts = project_path.split('_')
+                    for i in range(len(parts)):
+                        child = '_'.join(parts[:i+1])
+                        parent = '_'.join(parts[:i]) if i > 0 else parts[0]  # First level maps to top-level later
+                        # Check if parent exists in parent_child; if not, assume top-level
+                        cursor.execute('SELECT parent FROM parent_child WHERE child = ?', (parent,))
+                        parent_result = cursor.fetchone()
+                        if parent_result:
+                            parent = parent_result[0]
+                        elif i == 0:
+                            # Map first part to top-level if not already mapped
+                            cursor.execute('SELECT parent FROM parent_child WHERE child = ?', (child,))
+                            if not cursor.fetchone():
+                                cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', 
+                                               (child, 'STUDY' if child == 'study' else child.upper()))
+                            continue
+                        cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', (child, parent))
 
             except Exception as e:
                 print(f"解析错误在 {os.path.basename(filepath)} 第{line_num}行: {line}")
@@ -133,17 +140,6 @@ def parse_file(conn, filepath):
             UPDATE days SET status=?, remark=?, getup_time=?
             WHERE date=?
         ''', (day_info['status'], day_info['remark'], day_info['getup_time'], current_date))
-        
-        cursor.execute('''
-            INSERT INTO parent_time (date, parent, duration)
-            SELECT t.date, pc.parent, SUM(t.duration)
-            FROM time_records t
-            JOIN parent_child pc ON t.child = pc.child
-            WHERE t.date = ?
-            GROUP BY t.date, pc.parent
-            ON CONFLICT(date, parent) DO UPDATE SET
-                duration = excluded.duration
-        ''', (current_date,))
     
     conn.commit()
 
@@ -155,7 +151,6 @@ def format_duration(seconds):
 def query_day(conn, date):
     cursor = conn.cursor()
     
-    # 获取基础信息
     cursor.execute('''
         SELECT status, remark, getup_time 
         FROM days 
@@ -169,45 +164,45 @@ def query_day(conn, date):
     
     status, remark, getup = day_data
     output = [f"\n【{date} 时间统计】"]
-    
-    # 添加元数据
     output.append(f"状态: {status}")
     output.append(f"起床: {getup}")
     if remark.strip():
         output.append(f"备注: {remark}")
     
-    # 获取总时间
-    cursor.execute('SELECT SUM(duration) FROM parent_time WHERE date = ?', (date,))
-    total = cursor.fetchone()[0] or 0
+    cursor.execute('SELECT project_path, duration FROM time_records WHERE date = ?', (date,))
+    records = cursor.fetchall()
     
-    if total == 0:
+    if not records:
         output.append("\n无有效时间记录")
         print('\n'.join(output))
         return
     
-    # 添加时间统计
-    cursor.execute('''
-        SELECT parent, duration 
-        FROM parent_time 
-        WHERE date = ?
-        ORDER BY duration DESC
-    ''', (date,))
+    # Build hierarchical tree
+    tree = defaultdict(lambda: defaultdict(int))
+    for project_path, duration in records:
+        parts = project_path.split('_')
+        current = tree['STUDY'] if parts[0] == 'study' else tree[parts[0].upper()]
+        for part in parts:
+            if part not in current:
+                current[part] = defaultdict(int)
+            current[part]['duration'] += duration
+            current = current[part]
     
-    for parent, duration in cursor.fetchall():
-        percent = (duration / total * 100) if total > 0 else 0
-        output.append(f"\n{parent}: {format_duration(duration)} ({percent:.1f}%)")
-        
-        cursor.execute('''
-            SELECT t.child, SUM(t.duration)
-            FROM time_records t
-            JOIN parent_child pc ON t.child = pc.child
-            WHERE t.date = ? AND pc.parent = ?
-            GROUP BY t.child
-            ORDER BY SUM(t.duration) DESC
-        ''', (date, parent))
-        
-        for child, dur in cursor.fetchall():
-            output.append(f"  ├─ {child}: {format_duration(dur)}")
+    # Print tree
+    def print_subtree(node, indent=0, prefix=""):
+        lines = []
+        for key, value in node.items():
+            if key != 'duration':
+                duration = value['duration']
+                name = f"{prefix}{key}" if prefix else key
+                lines.append('  ' * indent + f"{name}: {format_duration(duration)}")
+                lines.extend(print_subtree(value, indent + 1, f"{name}_" if indent > 0 else ""))
+        return lines
+    
+    for top_level, subtree in tree.items():
+        total_duration = subtree['duration']
+        output.append(f"\n{top_level}: {format_duration(total_duration)}")
+        output.extend(print_subtree(subtree, 1))
     
     print('\n'.join(output))
 
@@ -216,7 +211,6 @@ def query_period(conn, days):
     end_date = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=days-1)).strftime("%Y%m%d")
 
-    # 状态统计
     cursor.execute('''
         SELECT 
             SUM(CASE WHEN status = 'True' THEN 1 ELSE 0 END) as true_count,
@@ -231,49 +225,46 @@ def query_period(conn, days):
     false_count = status_data[1] or 0
     total_days = status_data[2] or 0
 
-    # 输出统计头信息
     print(f"\n【最近{days}天统计】{start_date} - {end_date}")
     print(f"有效记录天数: {total_days}天")
     print("状态分布:")
     print(f"  True: {true_count}天 ({(true_count/total_days*100 if total_days>0 else 0):.1f}%)")
     print(f"  False: {false_count}天 ({(false_count/total_days*100 if total_days>0 else 0):.1f}%)")
 
-    # 时间分配统计
-    cursor.execute('''
-        SELECT parent, SUM(duration) 
-        FROM parent_time 
-        WHERE date BETWEEN ? AND ?
-        GROUP BY parent 
-        ORDER BY SUM(duration) DESC
-    ''', (start_date, end_date))
+    cursor.execute('SELECT project_path, duration FROM time_records WHERE date BETWEEN ? AND ?', 
+                   (start_date, end_date))
+    records = cursor.fetchall()
     
-    total = 0
-    results = []
-    for parent, duration in cursor.fetchall():
-        total += duration
-        results.append((parent, duration))
-    
-    if total == 0:
+    if not records:
         print("\n无有效时间记录")
         return
-
-    print("\n时间分配:")
-    for parent, duration in results:
-        percent = (duration / total * 100) if total > 0 else 0
-        print(f"\n{parent}: {format_duration(duration)} ({percent:.1f}%)")
-        
-        cursor.execute('''
-            SELECT t.child, SUM(t.duration)
-            FROM time_records t
-            JOIN parent_child pc ON t.child = pc.child
-            WHERE t.date BETWEEN ? AND ? AND pc.parent = ?
-            GROUP BY t.child
-            ORDER BY SUM(t.duration) DESC
-        ''', (start_date, end_date, parent))
-        
-        for child, dur in cursor.fetchall():
-            print(f"  ├─ {child}: {format_duration(dur)}")
-
+    
+    # Build hierarchical tree
+    tree = defaultdict(lambda: defaultdict(int))
+    for project_path, duration in records:
+        parts = project_path.split('_')
+        current = tree['STUDY'] if parts[0] == 'study' else tree[parts[0].upper()]
+        for part in parts:
+            if part not in current:
+                current[part] = defaultdict(int)
+            current[part]['duration'] += duration
+            current = current[part]
+    
+    # Print tree
+    def print_subtree(node, indent=0, prefix=""):
+        lines = []
+        for key, value in node.items():
+            if key != 'duration':
+                duration = value['duration']
+                name = f"{prefix}{key}" if prefix else key
+                lines.append('  ' * indent + f"{name}: {format_duration(duration)}")
+                lines.extend(print_subtree(value, indent + 1, f"{name}_" if indent > 0 else ""))
+        return lines
+    
+    for top_level, subtree in tree.items():
+        total_duration = subtree['duration']
+        print(f"\n{top_level}: {format_duration(total_duration)}")
+        print('\n'.join(print_subtree(subtree, 1)))
 def main():
     conn = init_db()
     
