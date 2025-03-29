@@ -59,7 +59,102 @@ def init_db():
     
     conn.commit()
     return conn
-
+def get_study_times(conn, year):
+    cursor = conn.cursor()
+    start_date = f"{year}0101"
+    end_date = f"{year}1231"
+    cursor.execute('''
+        SELECT date, SUM(duration)
+        FROM time_records
+        WHERE date BETWEEN ? AND ?
+        AND (project_path = 'study' OR project_path LIKE 'study_%')
+        GROUP BY date
+    ''', (start_date, end_date))
+    study_times = dict(cursor.fetchall())
+    return study_times
+def get_color(study_time):
+    hours = study_time / 3600
+    if hours == 0:
+        return '#ebedf0'
+    elif hours < 4:
+        return '#9be9a8'
+    elif hours < 8:
+        return '#40c463'
+    elif hours < 12:
+        return '#30a14e'
+    else:
+        return '#216e39'
+def generate_heatmap(conn, year, output_file):
+    from datetime import datetime, timedelta
+    study_times = get_study_times(conn, year)
+    
+    # 设置起止日期
+    start_date = datetime(year, 1, 1)
+    end_date = datetime(year, 12, 31)
+    
+    # 计算前置空白天数（GitHub 热力图从周日开始）
+    first_weekday = start_date.weekday()  # 0=周一, ..., 6=周日
+    front_empty_days = (6 - first_weekday) % 7 if first_weekday != 6 else 0
+    
+    # 计算总天数和后置空白天数
+    total_days = (end_date - start_date).days + 1
+    total_slots = front_empty_days + total_days
+    back_empty_days = (7 - (total_slots % 7)) % 7
+    
+    # 生成 heatmap_data
+    heatmap_data = []
+    # 前置空白天
+    for _ in range(front_empty_days):
+        heatmap_data.append((None, 'empty'))
+    # 年份内的天
+    current_date = start_date
+    while current_date <= end_date:
+        date_str = current_date.strftime("%Y%m%d")
+        study_time = study_times.get(date_str, 0)
+        color = get_color(study_time)
+        heatmap_data.append((current_date, color))
+        current_date += timedelta(days=1)
+    # 后置空白天
+    for _ in range(back_empty_days):
+        heatmap_data.append((None, 'empty'))
+    
+    # SVG 设置
+    cell_size = 12  # 方块大小：12x12 像素
+    spacing = 3   # 方块间距：3 像素
+    weeks = 53    # 列数：53 周
+    rows = 7      # 行数：7 天
+    width = weeks * (cell_size + spacing)  # 宽度：795 像素
+    height = rows * (cell_size + spacing)  # 高度：105 像素
+    
+    # 生成 SVG
+    svg = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">']
+    for i, (date, color) in enumerate(heatmap_data):
+        if color != 'empty':
+            # 计算方块位置
+            week_index = i // 7  # 第几周
+            day_index = i % 7   # 星期几（0=周日, ..., 6=周六）
+            x = week_index * (cell_size + spacing)
+            y = day_index * (cell_size + spacing)
+            # 添加矩形方块
+            svg.append(f'<rect width="{cell_size}" height="{cell_size}" x="{x}" y="{y}" fill="{color}" rx="2" ry="2" title="{date.strftime("%Y-%m-%d")}"/>')
+    svg.append('</svg>')
+    
+    # 生成 HTML 文件
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>GitHub Style Heatmap</title>
+    </head>
+    <body>
+        <div style="padding: 20px;">
+        {''.join(svg)}
+        </div>
+    </body>
+    </html>
+    """
+    with open(output_file, 'w') as f:
+        f.write(html)
 def time_to_seconds(t):
     try:
         if not t: return 0
@@ -327,8 +422,9 @@ def main():
         print("2. 查询最近7天")
         print("3. 查询最近14天")
         print("4. 查询最近30天")
-        print("5. 输出某天原始数据")  # 新增选项
-        print("6. 退出")            # 原选项5改为6
+        print("5. 输出某天原始数据")
+        print("6. 生成热力图")  # New option
+        print("7. 退出")        # Exit option shifted from 6 to 7
         choice = input("请选择操作：")
         
         if choice == '0':
@@ -346,13 +442,21 @@ def main():
         elif choice in ('2', '3', '4'):
             days_map = {'2':7, '3':14, '4':30}
             query_period(conn, days_map[choice])
-        elif choice == '5':  # 新增选项处理
+        elif choice == '5':
             date = input("请输入日期(YYYYMMDD):")
             if re.match(r'^\d{8}$', date):
                 query_day_raw(conn, date)
             else:
                 print("日期格式错误")
-        elif choice == '6':  # 退出选项
+        elif choice == '6':  # Handle heatmap generation
+            year = input("请输入年份（YYYY）：")
+            if re.match(r'^\d{4}$', year):
+                output_file = f"heatmap_{year}.html"
+                generate_heatmap(conn, int(year), output_file)
+                print(f"热力图已生成：{output_file}")
+            else:
+                print("年份格式错误")
+        elif choice == '7':  # Updated exit condition
             break
         else:
             print("请输入数字")
