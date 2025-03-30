@@ -199,75 +199,100 @@ def parse_file(conn, filepath):
     cursor = conn.cursor()
     current_date = None
     day_info = {'status': 'False', 'remark': '', 'getup_time': '00:00'}
+    time_records = []
 
     with open(filepath, 'r', encoding='utf-8') as f:
         for line_num, line in enumerate(f, 1):
             try:
                 line = line.strip()
-                if not line: continue
+                if not line:
+                    continue
 
                 if line.startswith('Date:'):
+                    # 如果已经有日期信息，先保存之前的日期信息
+                    if current_date:
+                        cursor.execute('''
+                            UPDATE days SET status=?, remark=?, getup_time=?
+                            WHERE date=?
+                        ''', (day_info['status'], day_info['remark'], day_info['getup_time'], current_date))
+                        for start, end, project_path, duration in time_records:
+                            cursor.execute('''
+                                INSERT OR REPLACE INTO time_records 
+                                VALUES (?, ?, ?, ?, ?)
+                            ''', (current_date, start, end, project_path, duration))
+                            # 动态构建层级关系
+                            parts = project_path.split('_')
+                            for i in range(len(parts)):
+                                child = '_'.join(parts[:i+1])
+                                parent = '_'.join(parts[:i]) if i > 0 else parts[0]
+                                cursor.execute('SELECT parent FROM parent_child WHERE child = ?', (parent,))
+                                parent_result = cursor.fetchone()
+                                if parent_result:
+                                    parent = parent_result[0]
+                                elif i == 0:
+                                    cursor.execute('SELECT parent FROM parent_child WHERE child = ?', (child,))
+                                    if not cursor.fetchone():
+                                        cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', 
+                                                       (child, 'STUDY' if child == 'study' else child.upper()))
+                                    continue
+                                cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', (child, parent))
+                        # 重置信息
+                        day_info = {'status': 'False', 'remark': '', 'getup_time': '00:00'}
+                        time_records = []
                     current_date = line[5:].strip()
                     cursor.execute('INSERT OR IGNORE INTO days (date) VALUES (?)', (current_date,))
-                    
                 elif line.startswith('Status:'):
                     day_info['status'] = line[7:].strip()
                 elif line.startswith('Remark:'):
                     day_info['remark'] = line[7:].strip()
                 elif line.startswith('Getup:'):
                     day_info['getup_time'] = line[6:].strip()
-                
                 elif '~' in line:
                     match = re.match(r'^(\d+:\d+)~(\d+:\d+)\s*([a-zA-Z_]+)', line)
                     if not match:
                         print(f"格式错误在 {os.path.basename(filepath)} 第{line_num}行: {line}")
                         continue
-                        
                     start, end, project_path = match.groups()
                     project_path = project_path.lower().replace('stduy', 'study')
-
                     start_sec = time_to_seconds(start)
                     end_sec = time_to_seconds(end)
                     if end_sec < start_sec:
-                        end_sec += 86400  # Handle midnight crossover
+                        end_sec += 86400  # 处理跨午夜情况
                     duration = end_sec - start_sec
-
-                    # Store the full project path
-                    cursor.execute('''
-                        INSERT OR REPLACE INTO time_records 
-                        VALUES (?, ?, ?, ?, ?)
-                    ''', (current_date, start, end, project_path, duration))
-
-                    # Dynamically build hierarchy
-                    parts = project_path.split('_')
-                    for i in range(len(parts)):
-                        child = '_'.join(parts[:i+1])
-                        parent = '_'.join(parts[:i]) if i > 0 else parts[0]  # First level maps to top-level later
-                        # Check if parent exists in parent_child; if not, assume top-level
-                        cursor.execute('SELECT parent FROM parent_child WHERE child = ?', (parent,))
-                        parent_result = cursor.fetchone()
-                        if parent_result:
-                            parent = parent_result[0]
-                        elif i == 0:
-                            # Map first part to top-level if not already mapped
-                            cursor.execute('SELECT parent FROM parent_child WHERE child = ?', (child,))
-                            if not cursor.fetchone():
-                                cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', 
-                                               (child, 'STUDY' if child == 'study' else child.upper()))
-                            continue
-                        cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', (child, parent))
-
+                    time_records.append((start, end, project_path, duration))
             except Exception as e:
                 print(f"解析错误在 {os.path.basename(filepath)} 第{line_num}行: {line}")
                 print(f"错误信息: {str(e)}")
                 continue
 
+    # 保存最后一个日期的信息
     if current_date:
         cursor.execute('''
             UPDATE days SET status=?, remark=?, getup_time=?
             WHERE date=?
         ''', (day_info['status'], day_info['remark'], day_info['getup_time'], current_date))
-    
+        for start, end, project_path, duration in time_records:
+            cursor.execute('''
+                INSERT OR REPLACE INTO time_records 
+                VALUES (?, ?, ?, ?, ?)
+            ''', (current_date, start, end, project_path, duration))
+            # 动态构建层级关系
+            parts = project_path.split('_')
+            for i in range(len(parts)):
+                child = '_'.join(parts[:i+1])
+                parent = '_'.join(parts[:i]) if i > 0 else parts[0]
+                cursor.execute('SELECT parent FROM parent_child WHERE child = ?', (parent,))
+                parent_result = cursor.fetchone()
+                if parent_result:
+                    parent = parent_result[0]
+                elif i == 0:
+                    cursor.execute('SELECT parent FROM parent_child WHERE child = ?', (child,))
+                    if not cursor.fetchone():
+                        cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', 
+                                       (child, 'STUDY' if child == 'study' else child.upper()))
+                    continue
+                cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', (child, parent))
+
     conn.commit()
 
 def format_duration(seconds):
@@ -455,8 +480,8 @@ def main():
         print("3. 查询最近14天")
         print("4. 查询最近30天")
         print("5. 输出某天原始数据")
-        print("6. 生成热力图")  # New option
-        print("7. 退出")        # Exit option shifted from 6 to 7
+        print("6. 生成热力图")  
+        print("7. 退出")       
         choice = input("请选择操作：")
         
         if choice == '0':
@@ -480,7 +505,7 @@ def main():
                 query_day_raw(conn, date)
             else:
                 print("日期格式错误")
-        elif choice == '6':  # Handle heatmap generation
+        elif choice == '6':  
             year = input("请输入年份（YYYY）：")
             if re.match(r'^\d{4}$', year):
                 output_file = f"heatmap_{year}.html"
@@ -488,7 +513,7 @@ def main():
                 print(f"热力图已生成：{output_file}")
             else:
                 print("年份格式错误")
-        elif choice == '7':  # Updated exit condition
+        elif choice == '7':  
             break
         else:
             print("请输入数字")
