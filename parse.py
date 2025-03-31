@@ -470,6 +470,62 @@ def query_day_raw(conn, date):
         output.append(f"{start}~{end}{project}")
     
     print('\n'.join(output))
+def query_month_summary(conn, year_month):
+    cursor = conn.cursor()
+    if not re.match(r'^\d{6}$', year_month):
+        print("月份格式错误，应为YYYYMM")
+        return
+
+    date_prefix = f"{year_month}%"
+    cursor.execute('''
+        SELECT project_path, SUM(duration)
+        FROM time_records
+        WHERE date LIKE ?
+        GROUP BY project_path
+    ''', (date_prefix,))
+    records = cursor.fetchall()
+
+    if not records:
+        print(f"没有找到{year_month}的记录")
+        return
+
+    tree = defaultdict(lambda: defaultdict(int))
+    for project_path, duration in records:
+        parts = project_path.split('_')
+        if not parts:
+            continue
+        
+        top_level = 'STUDY' if parts[0].lower() == 'study' else parts[0].upper()
+        tree[top_level]['duration'] += duration
+        
+        current = tree[top_level]
+        for part in parts[1:]:
+            if part not in current:
+                current[part] = defaultdict(int)
+            current[part]['duration'] += duration
+            current = current[part]
+
+    output = [f"\n【{year_month} 月统计】"]
+    
+    def print_subtree(node, indent=0, prefix=""):
+        lines = []
+        for key, value in node.items():
+            if key != 'duration':
+                duration = value['duration']
+                name = f"{prefix}{key}" if prefix else key
+                lines.append('  ' * indent + f"{name}: {format_duration(duration)}")
+                lines.extend(print_subtree(value, indent + 1, f"{name}_" if indent > 0 else ""))
+        return lines
+    
+    total = 0
+    for top_level, subtree in sorted(tree.items(), key=lambda x: -x[1]['duration']):
+        total_duration = subtree['duration']
+        total += total_duration
+        output.append(f"{top_level}: {format_duration(total_duration)}")
+        output.extend(print_subtree(subtree, 1))
+    
+    output.append(f"\n总时间: {format_duration(total)}")
+    print('\n'.join(output))
 def main():
     conn = init_db()
     
@@ -480,8 +536,9 @@ def main():
         print("3. 查询最近14天")
         print("4. 查询最近30天")
         print("5. 输出某天原始数据")
-        print("6. 生成热力图")  
-        print("7. 退出")       
+        print("6. 生成热力图")
+        print("7. 月统计数据")  # 新增选项
+        print("8. 退出")       
         choice = input("请选择操作：")
         
         if choice == '0':
@@ -505,7 +562,7 @@ def main():
                 query_day_raw(conn, date)
             else:
                 print("日期格式错误")
-        elif choice == '6':  
+        elif choice == '6':  # Handle heatmap generation
             year = input("请输入年份（YYYY）：")
             if re.match(r'^\d{4}$', year):
                 output_file = f"heatmap_{year}.html"
@@ -513,10 +570,16 @@ def main():
                 print(f"热力图已生成：{output_file}")
             else:
                 print("年份格式错误")
-        elif choice == '7':  
+        elif choice == '7':  # 新增月统计处理
+            year_month = input("请输入年份和月份（如202502）：")
+            if re.match(r'^\d{6}$', year_month):
+                query_month_summary(conn, year_month)
+            else:
+                print("月份格式错误")
+        elif choice == '8':  
             break
         else:
-            print("请输入数字")
+            print("input int num")
     
     conn.close()
 
