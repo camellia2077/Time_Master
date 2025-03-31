@@ -47,7 +47,8 @@ def init_db():
         'sleep': 'SLEEP',
         'recreation': 'RECREATION',
         'other': 'OTHER',
-        'meal': 'MEAL'
+        'meal': 'MEAL',
+        'program':'Program',
     }
     
     # Insert only top-level mappings; sub-levels will be built dynamically
@@ -295,10 +296,20 @@ def parse_file(conn, filepath):
 
     conn.commit()
 
-def format_duration(seconds):
+def format_duration(seconds, avg_days=1):
+    # 新增avg_days参数，保留两位小数的小时数
+    total_h = seconds / 3600
+    avg_h = total_h / avg_days if avg_days > 0 else 0
+    
+    # 原始格式保持小时+分钟显示
     hours = seconds // 3600
     minutes = (seconds % 3600) // 60
-    return f"{hours}h{minutes:02d}m" if hours else f"{minutes}m"
+    
+    # 构建显示字符串
+    time_str = f"{hours}h{minutes:02d}m" if hours else f"{minutes}m"
+    avg_str = f"{avg_h:.2f}h"  # 平均时间统一用小时显示
+    
+    return f"{time_str} ({avg_str}/day)" if avg_days > 1 else time_str
 
 def query_day(conn, date):
     cursor = conn.cursor()
@@ -385,11 +396,11 @@ def query_period(conn, days):
     false_count = status_data[1] or 0
     total_days = status_data[2] or 0
 
-    print(f"\n【最近{days}天统计】{start_date} - {end_date}")
-    print(f"有效记录天数: {total_days}天")
+    print(f"\n[最近{days}天统计]{start_date} - {end_date}")
+    print(f"有效记录天数:{total_days}天")
     print("状态分布:")
-    print(f"  True: {true_count}天 ({(true_count/total_days*100 if total_days>0 else 0):.1f}%)")
-    print(f"  False: {false_count}天 ({(false_count/total_days*100 if total_days>0 else 0):.1f}%)")
+    print(f" True: {true_count}天 ({(true_count/total_days*100 if total_days>0 else 0):.1f}%)")
+    print(f" False: {false_count}天 ({(false_count/total_days*100 if total_days>0 else 0):.1f}%)")
 
     cursor.execute('SELECT project_path, duration FROM time_records WHERE date BETWEEN ? AND ?', 
                    (start_date, end_date))
@@ -418,21 +429,24 @@ def query_period(conn, days):
             current[part]['duration'] += duration
             current = current[part]
     
-    # Print tree
-    def print_subtree(node, indent=0, prefix=""):
+    # 修改后的打印函数
+    def print_subtree(node, indent=0, prefix="", avg_days=1):
         lines = []
         for key, value in node.items():
             if key != 'duration':
                 duration = value['duration']
                 name = f"{prefix}{key}" if prefix else key
-                lines.append('  ' * indent + f"{name}: {format_duration(duration)}")
-                lines.extend(print_subtree(value, indent + 1, f"{name}_" if indent > 0 else ""))
+                # 添加avg_days参数
+                lines.append('  ' * indent + f"{name}: {format_duration(duration, avg_days)}")
+                # 向下传递avg_days参数
+                lines.extend(print_subtree(value, indent + 1, f"{name}_" if indent > 0 else "", avg_days))
         return lines
     
     for top_level, subtree in tree.items():
         total_duration = subtree['duration']
-        print(f"\n{top_level}: {format_duration(total_duration)}")
-        print('\n'.join(print_subtree(subtree, 1)))
+        # 在顶层显示时传入天数参数
+        print(f"\n{top_level}: {format_duration(total_duration, days)}")
+        print('\n'.join(print_subtree(subtree, 1, avg_days=days)))
 def query_day_raw(conn, date):
     cursor = conn.cursor()
     
@@ -471,12 +485,20 @@ def query_day_raw(conn, date):
     
     print('\n'.join(output))
 def query_month_summary(conn, year_month):
+    import calendar
     cursor = conn.cursor()
+    
+    # 解析年月并验证
     if not re.match(r'^\d{6}$', year_month):
         print("月份格式错误，应为YYYYMM")
         return
-
-    date_prefix = f"{year_month}%"
+    
+    year = int(year_month[:4])
+    month = int(year_month[4:6])
+    last_day = calendar.monthrange(year, month)[1]
+    actual_days = last_day  # 实际当月天数
+    
+    date_prefix = f"{year}{month:02d}%"
     cursor.execute('''
         SELECT project_path, SUM(duration)
         FROM time_records
@@ -513,7 +535,8 @@ def query_month_summary(conn, year_month):
             if key != 'duration':
                 duration = value['duration']
                 name = f"{prefix}{key}" if prefix else key
-                lines.append('  ' * indent + f"{name}: {format_duration(duration)}")
+                # 添加月平均计算
+                lines.append('  ' * indent + f"{name}: {format_duration(duration, actual_days)}")
                 lines.extend(print_subtree(value, indent + 1, f"{name}_" if indent > 0 else ""))
         return lines
     
@@ -521,10 +544,12 @@ def query_month_summary(conn, year_month):
     for top_level, subtree in sorted(tree.items(), key=lambda x: -x[1]['duration']):
         total_duration = subtree['duration']
         total += total_duration
-        output.append(f"{top_level}: {format_duration(total_duration)}")
+        output.append(f"{top_level}: {format_duration(total_duration, actual_days)}")
         output.extend(print_subtree(subtree, 1))
     
-    output.append(f"\n总时间: {format_duration(total)}")
+    # 显示总平均时间
+    total_avg = total/actual_days/3600 if actual_days >0 else 0
+    output.append(f"\n总时间: {format_duration(total)} ({total_avg:.2f}h)")
     print('\n'.join(output))
 def main():
     conn = init_db()
@@ -537,7 +562,7 @@ def main():
         print("4. 查询最近30天")
         print("5. 输出某天原始数据")
         print("6. 生成热力图")
-        print("7. 月统计数据")  # 新增选项
+        print("7. 月统计数据")  
         print("8. 退出")       
         choice = input("请选择操作：")
         
@@ -570,13 +595,13 @@ def main():
                 print(f"热力图已生成：{output_file}")
             else:
                 print("年份格式错误")
-        elif choice == '7':  # 新增月统计处理
+        elif choice == '7':  
             year_month = input("请输入年份和月份（如202502）：")
             if re.match(r'^\d{6}$', year_month):
                 query_month_summary(conn, year_month)
             else:
                 print("月份格式错误")
-        elif choice == '8':  
+        elif choice == '8': 
             break
         else:
             print("input int num")
