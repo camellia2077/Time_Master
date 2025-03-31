@@ -13,7 +13,7 @@ BROWN_LIGHT = ['#efebe9', '#d7ccc8', '#bcaaa4', '#8d6e63', '#6d4c41']
 LAVA_RED_LIGHT = ['#ffebee', '#ffcdd2', '#ef9a9a', '#e57373', '#ef5350']
 GOLD_LIGHT = ['#fff8e1', '#ffe082', '#ffd54f', '#ffb300', '#ff8f00']
 BLOOD_RED_LIGHT = ['#fff5f0', '#fee0d2', '#fc9272', '#de2d26', '#a50f15']
-DEFAULT_COLOR_PALETTE = GITHUB_GREEN_DARK
+DEFAULT_COLOR_PALETTE = GITHUB_GREEN_LIGHT
 
 def init_db():
     conn = sqlite3.connect('time_tracking.db')
@@ -52,6 +52,7 @@ def init_db():
     # Predefined top-level mappings (no longer hardcoding all combinations)
     top_level_map = {
         'study': 'STUDY',
+        'routine': 'ROUTINE',
         'break': 'BREAK',
         'rest': 'REST',
         'exercise': 'EXERCISE',
@@ -60,6 +61,7 @@ def init_db():
         'other': 'OTHER',
         'meal': 'MEAL',
         'program':'Program',
+        'arrange':'ARRANGE',
     }
     
     # Insert only top-level mappings; sub-levels will be built dynamically
@@ -221,7 +223,6 @@ def parse_file(conn, filepath):
                     continue
 
                 if line.startswith('Date:'):
-                    # 如果已经有日期信息，先保存之前的日期信息
                     if current_date:
                         cursor.execute('''
                             UPDATE days SET status=?, remark=?, getup_time=?
@@ -232,7 +233,6 @@ def parse_file(conn, filepath):
                                 INSERT OR REPLACE INTO time_records 
                                 VALUES (?, ?, ?, ?, ?)
                             ''', (current_date, start, end, project_path, duration))
-                            # 动态构建层级关系
                             parts = project_path.split('_')
                             for i in range(len(parts)):
                                 child = '_'.join(parts[:i+1])
@@ -248,7 +248,6 @@ def parse_file(conn, filepath):
                                                        (child, 'STUDY' if child == 'study' else child.upper()))
                                     continue
                                 cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', (child, parent))
-                        # 重置信息
                         day_info = {'status': 'False', 'remark': '', 'getup_time': '00:00'}
                         time_records = []
                     current_date = line[5:].strip()
@@ -260,7 +259,8 @@ def parse_file(conn, filepath):
                 elif line.startswith('Getup:'):
                     day_info['getup_time'] = line[6:].strip()
                 elif '~' in line:
-                    match = re.match(r'^(\d+:\d+)~(\d+:\d+)\s*([a-zA-Z_]+)', line)
+                    # 修改正则表达式允许连字符
+                    match = re.match(r'^(\d+:\d+)~(\d+:\d+)\s*([a-zA-Z_-]+)', line)  # 关键修改点
                     if not match:
                         print(f"格式错误在 {os.path.basename(filepath)} 第{line_num}行: {line}")
                         continue
@@ -269,7 +269,7 @@ def parse_file(conn, filepath):
                     start_sec = time_to_seconds(start)
                     end_sec = time_to_seconds(end)
                     if end_sec < start_sec:
-                        end_sec += 86400  # 处理跨午夜情况
+                        end_sec += 86400
                     duration = end_sec - start_sec
                     time_records.append((start, end, project_path, duration))
             except Exception as e:
@@ -277,7 +277,6 @@ def parse_file(conn, filepath):
                 print(f"错误信息: {str(e)}")
                 continue
 
-    # 保存最后一个日期的信息
     if current_date:
         cursor.execute('''
             UPDATE days SET status=?, remark=?, getup_time=?
@@ -288,7 +287,6 @@ def parse_file(conn, filepath):
                 INSERT OR REPLACE INTO time_records 
                 VALUES (?, ?, ?, ?, ?)
             ''', (current_date, start, end, project_path, duration))
-            # 动态构建层级关系
             parts = project_path.split('_')
             for i in range(len(parts)):
                 child = '_'.join(parts[:i+1])
