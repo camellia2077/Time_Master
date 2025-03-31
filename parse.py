@@ -3,6 +3,17 @@ import re
 import os
 from datetime import datetime, timedelta
 from collections import defaultdict
+GITHUB_GREEN_LIGHT = ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39']
+GITHUB_GREEN_DARK = ['#151b23', '#033a16', '#196c2e', '#2ea043', '#56d364']
+BLUE_LIGHT= ['#f7fbff', '#c6dbef', '#6baed6', '#2171b5', '#08306b']
+ORANGE_LIGHT = ['#fff8e1', '#ffe082', '#ffd54f', '#ffb300', '#ff8f00']
+PINK_LIGHT = ['#fce4ec', '#f8bbd0', '#f48fb1', '#f06292', '#ec407a']
+PURPLE_LIGHT = ['#f3e5f5', '#ce93d8', '#ab47bc', '#8e24aa', '#6a1b9a']
+BROWN_LIGHT = ['#efebe9', '#d7ccc8', '#bcaaa4', '#8d6e63', '#6d4c41']
+LAVA_RED_LIGHT = ['#ffebee', '#ffcdd2', '#ef9a9a', '#e57373', '#ef5350']
+GOLD_LIGHT = ['#fff8e1', '#ffe082', '#ffd54f', '#ffb300', '#ff8f00']
+BLOOD_RED_LIGHT = ['#fff5f0', '#fee0d2', '#fc9272', '#de2d26', '#a50f15']
+DEFAULT_COLOR_PALETTE = GITHUB_GREEN_DARK
 
 def init_db():
     conn = sqlite3.connect('time_tracking.db')
@@ -76,15 +87,15 @@ def get_study_times(conn, year):
 def get_color(study_time):
     hours = study_time / 3600
     if hours == 0:
-        return '#ebedf0'
+        return DEFAULT_COLOR_PALETTE[0]
     elif hours < 4:
-        return '#9be9a8'
+        return DEFAULT_COLOR_PALETTE[1]
     elif hours < 8:
-        return '#40c463'
+        return DEFAULT_COLOR_PALETTE[2]
     elif hours < 12:
-        return '#30a14e'
+        return DEFAULT_COLOR_PALETTE[3]
     else:
-        return '#216e39'
+        return DEFAULT_COLOR_PALETTE[4]
 def generate_heatmap(conn, year, output_file):
     from datetime import datetime, timedelta
     study_times = get_study_times(conn, year)
@@ -573,7 +584,7 @@ def main():
                     print(f"正在处理文件: {filename}")
                     parse_file(conn, os.path.join(folder, filename))
         elif choice == '1':
-            date = input("请输入日期（YYYYMMDD）：")
+            date = input("请输入日期(如YYYYMMDD):")
             if re.match(r'^\d{8}$', date):
                 query_day(conn, date)
             else:
@@ -588,20 +599,20 @@ def main():
             else:
                 print("日期格式错误")
         elif choice == '6':  # Handle heatmap generation
-            year = input("请输入年份（YYYY）：")
+            year = input("请输入年份(YYYY):")
             if re.match(r'^\d{4}$', year):
                 output_file = f"heatmap_{year}.html"
                 generate_heatmap(conn, int(year), output_file)
                 print(f"热力图已生成：{output_file}")
             else:
                 print("年份格式错误")
-        elif choice == '7':  
-            year_month = input("请输入年份和月份（如202502）：")
+        elif choice == '7':  # 新增月统计处理
+            year_month = input("请输入年份和月份(如202502):")
             if re.match(r'^\d{6}$', year_month):
                 query_month_summary(conn, year_month)
             else:
                 print("月份格式错误")
-        elif choice == '8': 
+        elif choice == '8':  # 退出选项改为8
             break
         else:
             print("input int num")
