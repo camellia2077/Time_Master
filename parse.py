@@ -52,6 +52,7 @@ def init_db():
     # Predefined top-level mappings (no longer hardcoding all combinations)
     top_level_map = {
         'study': 'STUDY',
+        'code': 'CODE',
         'routine': 'ROUTINE',
         'break': 'BREAK',
         'rest': 'REST',
@@ -577,10 +578,12 @@ def main():
         
         if choice == '0':
             folder = input("请输入文件目录：")
-            for filename in os.listdir(folder):
-                if filename.lower().endswith(".txt"):
-                    print(f"正在处理文件: {filename}")
-                    parse_file(conn, os.path.join(folder, filename))
+            for root, dirs, files in os.walk(folder):
+                for filename in files:
+                    if filename.lower().endswith(".txt"):
+                        filepath = os.path.join(root, filename)
+                        print(f"正在处理文件: {filepath}")
+                        parse_file(conn, filepath)
         elif choice == '1':
             date = input("请输入日期(如YYYYMMDD):")
             if re.match(r'^\d{8}$', date):
