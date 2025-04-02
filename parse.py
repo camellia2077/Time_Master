@@ -321,15 +321,22 @@ def format_duration(seconds, avg_days=1):
     avg_str = f"{avg_h:.2f}h"  # 平均时间统一用小时显示
     
     return f"{time_str} ({avg_str}/day)" if avg_days > 1 else time_str
-
+def generate_sorted_output(node, avg_days=1, indent=0):
+    """递归生成按时间降序排列的输出行"""
+    lines = []
+    # 过滤出子节点并按duration降序排序
+    children = [(k, v) for k, v in node.items() if k != 'duration']
+    sorted_children = sorted(children, key=lambda x: x[1].get('duration', 0), reverse=True)
+    
+    for key, value in sorted_children:
+        duration = value.get('duration', 0)
+        lines.append('  ' * indent + f"{key}: {format_duration(duration, avg_days)}")
+        # 递归处理子节点
+        lines.extend(generate_sorted_output(value, avg_days, indent + 1))
+    return lines
 def query_day(conn, date):
     cursor = conn.cursor()
-    
-    cursor.execute('''
-        SELECT status, remark, getup_time 
-        FROM days 
-        WHERE date = ?
-    ''', (date,))
+    cursor.execute('SELECT status, remark, getup_time FROM days WHERE date = ?', (date,))
     day_data = cursor.fetchone()
     
     if not day_data:
@@ -337,72 +344,30 @@ def query_day(conn, date):
         return
     
     status, remark, getup = day_data
-    output = [f"\nDate:{date} "]
-    output.append(f"Status:{status}")
-    output.append(f"Getup:{getup}")
+    output = [f"\nDate:{date}", f"Status:{status}", f"Getup:{getup}"]
     if remark.strip():
         output.append(f"Remark:{remark}")
     
     cursor.execute('SELECT project_path, duration FROM time_records WHERE date = ?', (date,))
     records = cursor.fetchall()
     
-    if not records:
-        output.append("\n无有效时间记录")
-        print('\n'.join(output))
-        return
-    
-    # Build hierarchical tree
-    tree = defaultdict(lambda: defaultdict(int))
-    for project_path, duration in records:
-        parts = project_path.split('_')
-        if not parts:
-            continue
+    if records:
+        tree = defaultdict(lambda: defaultdict(int))
+        for project_path, duration in records:
+            parts = project_path.split('_')
+            if parts:
+                top_level = 'STUDY' if parts[0].lower() == 'study' else parts[0].upper()
+                tree[top_level]['duration'] += duration
+                current = tree[top_level]
+                for part in parts[1:]:
+                    current[part]['duration'] += duration
+                    current = current[part]
         
-        # 处理顶层项目
-        top_level = 'STUDY' if parts[0].lower() == 'study' else parts[0].upper()
-        tree[top_level]['duration'] += duration
-        
-        # 处理子层级
-        current = tree[top_level]
-        for part in parts[1:]:
-            if part not in current:
-                current[part] = defaultdict(int)
-            current[part]['duration'] += duration
-            current = current[part]
-    
-    # 修改点1: 顶层项目排序
-    sorted_top_level = sorted(
-        tree.items(),
-        key=lambda x: x[1]['duration'],
-        reverse=True
-    )
-
-    # 修改点2: 递归打印函数添加排序逻辑
-    def print_subtree(node, indent=0, prefix=""):
-        lines = []
-        # 过滤掉'duration'键并按duration降序排序
-        children = [
-            (k, v) for k, v in node.items()
-            if k != 'duration'
-        ]
-        sorted_children = sorted(
-            children,
-            key=lambda x: x[1]['duration'],
-            reverse=True
-        )
-        
-        for key, value in sorted_children:
-            duration = value['duration']
-            name = f"{prefix}{key}" if prefix else key
-            lines.append('  ' * indent + f"{name}: {format_duration(duration)}")
-            lines.extend(print_subtree(value, indent + 1, f"{name}_" if indent > 0 else ""))
-        return lines
-    
-    # 修改点3: 遍历排序后的顶层项目
-    for top_level, subtree in sorted_top_level:
-        total_duration = subtree['duration']
-        output.append(f"\n{top_level}: {format_duration(total_duration)}")
-        output.extend(print_subtree(subtree, 1))
+        # 按顶层项目总时长排序
+        sorted_top_level = sorted(tree.items(), key=lambda x: x[1]['duration'], reverse=True)
+        for top_level, subtree in sorted_top_level:
+            output.append(f"\n{top_level}: {format_duration(subtree['duration'])}")
+            output.extend(generate_sorted_output(subtree, indent=1))
     
     print('\n'.join(output))
 
@@ -440,42 +405,33 @@ def query_period(conn, days):
         return
     
     # Build hierarchical tree
-    tree = defaultdict(lambda: defaultdict(int))
+    tree = defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)})
     for project_path, duration in records:
         parts = project_path.split('_')
         if not parts:
             continue
         
-        # 处理顶层项目
+         # 处理顶层项目
         top_level = 'STUDY' if parts[0].lower() == 'study' else parts[0].upper()
         tree[top_level]['duration'] += duration
         
         # 处理子层级
         current = tree[top_level]
         for part in parts[1:]:
-            if part not in current:
-                current[part] = defaultdict(int)
-            current[part]['duration'] += duration
-            current = current[part]
+            if not isinstance(current['children'].get(part), dict):
+                current['children'][part] = {'duration': 0, 'children': defaultdict(dict)}
+            current['children'][part]['duration'] += duration
+            current = current['children'][part]
+
+    # 按总时长排序顶层项目
+    sorted_top_level = sorted(tree.items(), key=lambda x: x[1]['duration'], reverse=True)
     
-    # 修改后的打印函数
-    def print_subtree(node, indent=0, prefix="", avg_days=1):
-        lines = []
-        for key, value in node.items():
-            if key != 'duration':
-                duration = value['duration']
-                name = f"{prefix}{key}" if prefix else key
-                # 添加avg_days参数
-                lines.append('  ' * indent + f"{name}: {format_duration(duration, avg_days)}")
-                # 向下传递avg_days参数
-                lines.extend(print_subtree(value, indent + 1, f"{name}_" if indent > 0 else "", avg_days))
-        return lines
-    
-    for top_level, subtree in tree.items():
+    for top_level, subtree in sorted_top_level:
         total_duration = subtree['duration']
-        # 在顶层显示时传入天数参数
         print(f"\n{top_level}: {format_duration(total_duration, days)}")
-        print('\n'.join(print_subtree(subtree, 1, avg_days=days)))
+        # 使用统一的排序输出函数
+        print('\n'.join(generate_sorted_output(subtree, avg_days=days, indent=1)))
+
 def query_day_raw(conn, date):
     cursor = conn.cursor()
     
@@ -539,7 +495,7 @@ def query_month_summary(conn, year_month):
         print(f"没有找到{year_month}的记录")
         return
 
-    tree = defaultdict(lambda: defaultdict(int))
+    tree = defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)})
     for project_path, duration in records:
         parts = project_path.split('_')
         if not parts:
@@ -550,30 +506,23 @@ def query_month_summary(conn, year_month):
         
         current = tree[top_level]
         for part in parts[1:]:
-            if part not in current:
-                current[part] = defaultdict(int)
-            current[part]['duration'] += duration
-            current = current[part]
+            if not isinstance(current['children'].get(part), dict):
+                current['children'][part] = {'duration': 0, 'children': defaultdict(dict)}
+            current['children'][part]['duration'] += duration
+            current = current['children'][part]
 
     output = [f"\n[{year_month} 月统计]"]
     
-    def print_subtree(node, indent=0, prefix=""):
-        lines = []
-        for key, value in node.items():
-            if key != 'duration':
-                duration = value['duration']
-                name = f"{prefix}{key}" if prefix else key
-                # 添加月平均计算
-                lines.append('  ' * indent + f"{name}: {format_duration(duration, actual_days)}")
-                lines.extend(print_subtree(value, indent + 1, f"{name}_" if indent > 0 else ""))
-        return lines
+    # 按总时长排序顶层项目
+    sorted_top_level = sorted(tree.items(), key=lambda x: x[1].get('duration', 0), reverse=True)
     
     total = 0
-    for top_level, subtree in sorted(tree.items(), key=lambda x: -x[1]['duration']):
+    for top_level, subtree in sorted_top_level:
         total_duration = subtree['duration']
         total += total_duration
         output.append(f"{top_level}: {format_duration(total_duration, actual_days)}")
-        output.extend(print_subtree(subtree, 1))
+        # 使用统一的排序输出函数
+        output.extend(generate_sorted_output(subtree, avg_days=actual_days, indent=1))
     
     # 显示总平均时间
     total_avg = total/actual_days/3600 if actual_days >0 else 0
@@ -617,7 +566,7 @@ def main():
                 query_day_raw(conn, date)
             else:
                 print("日期格式错误")
-        elif choice == '6':  
+        elif choice == '6':  # Handle heatmap generation
             year = input("请输入年份(YYYY):")
             if re.match(r'^\d{4}$', year):
                 output_file = f"heatmap_{year}.html"
@@ -625,13 +574,13 @@ def main():
                 print(f"热力图已生成：{output_file}")
             else:
                 print("年份格式错误")
-        elif choice == '7':  
+        elif choice == '7':  # 新增月统计处理
             year_month = input("请输入年份和月份(如202502):")
             if re.match(r'^\d{6}$', year_month):
                 query_month_summary(conn, year_month)
             else:
                 print("月份格式错误")
-        elif choice == '8':  
+        elif choice == '8':  # 退出选项改为8
             break
         else:
             print("input int num")
