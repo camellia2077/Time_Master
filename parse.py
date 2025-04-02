@@ -3,6 +3,7 @@ import re
 import os
 from datetime import datetime, timedelta
 from collections import defaultdict
+import calendar
 GITHUB_GREEN_LIGHT = ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39']
 GITHUB_GREEN_DARK = ['#151b23', '#033a16', '#196c2e', '#2ea043', '#56d364']
 BLUE_LIGHT= ['#f7fbff', '#c6dbef', '#6baed6', '#2171b5', '#08306b']
@@ -74,6 +75,101 @@ def init_db():
     
     conn.commit()
     return conn
+def parse_file(conn, filepath):
+    cursor = conn.cursor()
+    current_date = None
+    day_info = {'status': 'False', 'remark': '', 'getup_time': '00:00'}
+    time_records = []
+
+    with open(filepath, 'r', encoding='utf-8') as f:
+        for line_num, line in enumerate(f, 1):
+            try:
+                line = line.strip()
+                if not line:
+                    continue
+
+                if line.startswith('Date:'):
+                    if current_date:
+                        cursor.execute('''
+                            UPDATE days SET status=?, remark=?, getup_time=?
+                            WHERE date=?
+                        ''', (day_info['status'], day_info['remark'], day_info['getup_time'], current_date))
+                        for start, end, project_path, duration in time_records:
+                            cursor.execute('''
+                                INSERT OR REPLACE INTO time_records 
+                                VALUES (?, ?, ?, ?, ?)
+                            ''', (current_date, start, end, project_path, duration))
+                            parts = project_path.split('_')
+                            for i in range(len(parts)):
+                                child = '_'.join(parts[:i+1])
+                                parent = '_'.join(parts[:i]) if i > 0 else parts[0]
+                                cursor.execute('SELECT parent FROM parent_child WHERE child = ?', (parent,))
+                                parent_result = cursor.fetchone()
+                                if parent_result:
+                                    parent = parent_result[0]
+                                elif i == 0:
+                                    cursor.execute('SELECT parent FROM parent_child WHERE child = ?', (child,))
+                                    if not cursor.fetchone():
+                                        cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', 
+                                                       (child, 'STUDY' if child == 'study' else child.upper()))
+                                    continue
+                                cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', (child, parent))
+                        day_info = {'status': 'False', 'remark': '', 'getup_time': '00:00'}
+                        time_records = []
+                    current_date = line[5:].strip()
+                    cursor.execute('INSERT OR IGNORE INTO days (date) VALUES (?)', (current_date,))
+                elif line.startswith('Status:'):
+                    day_info['status'] = line[7:].strip()
+                elif line.startswith('Remark:'):
+                    day_info['remark'] = line[7:].strip()
+                elif line.startswith('Getup:'):
+                    day_info['getup_time'] = line[6:].strip()
+                elif '~' in line:
+                    # 修改正则表达式允许连字符
+                    match = re.match(r'^(\d+:\d+)~(\d+:\d+)\s*([a-zA-Z_-]+)', line)  # 关键修改点
+                    if not match:
+                        print(f"格式错误在 {os.path.basename(filepath)} 第{line_num}行: {line}")
+                        continue
+                    start, end, project_path = match.groups()
+                    project_path = project_path.lower().replace('stduy', 'study')
+                    start_sec = time_to_seconds(start)
+                    end_sec = time_to_seconds(end)
+                    if end_sec < start_sec:
+                        end_sec += 86400
+                    duration = end_sec - start_sec
+                    time_records.append((start, end, project_path, duration))
+            except Exception as e:
+                print(f"解析错误在 {os.path.basename(filepath)} 第{line_num}行: {line}")
+                print(f"错误信息: {str(e)}")
+                continue
+
+    if current_date:
+        cursor.execute('''
+            UPDATE days SET status=?, remark=?, getup_time=?
+            WHERE date=?
+        ''', (day_info['status'], day_info['remark'], day_info['getup_time'], current_date))
+        for start, end, project_path, duration in time_records:
+            cursor.execute('''
+                INSERT OR REPLACE INTO time_records 
+                VALUES (?, ?, ?, ?, ?)
+            ''', (current_date, start, end, project_path, duration))
+            parts = project_path.split('_')
+            for i in range(len(parts)):
+                child = '_'.join(parts[:i+1])
+                parent = '_'.join(parts[:i]) if i > 0 else parts[0]
+                cursor.execute('SELECT parent FROM parent_child WHERE child = ?', (parent,))
+                parent_result = cursor.fetchone()
+                if parent_result:
+                    parent = parent_result[0]
+                elif i == 0:
+                    cursor.execute('SELECT parent FROM parent_child WHERE child = ?', (child,))
+                    if not cursor.fetchone():
+                        cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', 
+                                       (child, 'STUDY' if child == 'study' else child.upper()))
+                    continue
+                cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', (child, parent))
+
+    conn.commit()
 def get_study_times(conn, year):
     cursor = conn.cursor()
     start_date = f"{year}0101"
@@ -210,101 +306,6 @@ def time_to_seconds(t):
     except:
         return 0
 
-def parse_file(conn, filepath):
-    cursor = conn.cursor()
-    current_date = None
-    day_info = {'status': 'False', 'remark': '', 'getup_time': '00:00'}
-    time_records = []
-
-    with open(filepath, 'r', encoding='utf-8') as f:
-        for line_num, line in enumerate(f, 1):
-            try:
-                line = line.strip()
-                if not line:
-                    continue
-
-                if line.startswith('Date:'):
-                    if current_date:
-                        cursor.execute('''
-                            UPDATE days SET status=?, remark=?, getup_time=?
-                            WHERE date=?
-                        ''', (day_info['status'], day_info['remark'], day_info['getup_time'], current_date))
-                        for start, end, project_path, duration in time_records:
-                            cursor.execute('''
-                                INSERT OR REPLACE INTO time_records 
-                                VALUES (?, ?, ?, ?, ?)
-                            ''', (current_date, start, end, project_path, duration))
-                            parts = project_path.split('_')
-                            for i in range(len(parts)):
-                                child = '_'.join(parts[:i+1])
-                                parent = '_'.join(parts[:i]) if i > 0 else parts[0]
-                                cursor.execute('SELECT parent FROM parent_child WHERE child = ?', (parent,))
-                                parent_result = cursor.fetchone()
-                                if parent_result:
-                                    parent = parent_result[0]
-                                elif i == 0:
-                                    cursor.execute('SELECT parent FROM parent_child WHERE child = ?', (child,))
-                                    if not cursor.fetchone():
-                                        cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', 
-                                                       (child, 'STUDY' if child == 'study' else child.upper()))
-                                    continue
-                                cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', (child, parent))
-                        day_info = {'status': 'False', 'remark': '', 'getup_time': '00:00'}
-                        time_records = []
-                    current_date = line[5:].strip()
-                    cursor.execute('INSERT OR IGNORE INTO days (date) VALUES (?)', (current_date,))
-                elif line.startswith('Status:'):
-                    day_info['status'] = line[7:].strip()
-                elif line.startswith('Remark:'):
-                    day_info['remark'] = line[7:].strip()
-                elif line.startswith('Getup:'):
-                    day_info['getup_time'] = line[6:].strip()
-                elif '~' in line:
-                    # 修改正则表达式允许连字符
-                    match = re.match(r'^(\d+:\d+)~(\d+:\d+)\s*([a-zA-Z_-]+)', line)  # 关键修改点
-                    if not match:
-                        print(f"格式错误在 {os.path.basename(filepath)} 第{line_num}行: {line}")
-                        continue
-                    start, end, project_path = match.groups()
-                    project_path = project_path.lower().replace('stduy', 'study')
-                    start_sec = time_to_seconds(start)
-                    end_sec = time_to_seconds(end)
-                    if end_sec < start_sec:
-                        end_sec += 86400
-                    duration = end_sec - start_sec
-                    time_records.append((start, end, project_path, duration))
-            except Exception as e:
-                print(f"解析错误在 {os.path.basename(filepath)} 第{line_num}行: {line}")
-                print(f"错误信息: {str(e)}")
-                continue
-
-    if current_date:
-        cursor.execute('''
-            UPDATE days SET status=?, remark=?, getup_time=?
-            WHERE date=?
-        ''', (day_info['status'], day_info['remark'], day_info['getup_time'], current_date))
-        for start, end, project_path, duration in time_records:
-            cursor.execute('''
-                INSERT OR REPLACE INTO time_records 
-                VALUES (?, ?, ?, ?, ?)
-            ''', (current_date, start, end, project_path, duration))
-            parts = project_path.split('_')
-            for i in range(len(parts)):
-                child = '_'.join(parts[:i+1])
-                parent = '_'.join(parts[:i]) if i > 0 else parts[0]
-                cursor.execute('SELECT parent FROM parent_child WHERE child = ?', (parent,))
-                parent_result = cursor.fetchone()
-                if parent_result:
-                    parent = parent_result[0]
-                elif i == 0:
-                    cursor.execute('SELECT parent FROM parent_child WHERE child = ?', (child,))
-                    if not cursor.fetchone():
-                        cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', 
-                                       (child, 'STUDY' if child == 'study' else child.upper()))
-                    continue
-                cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', (child, parent))
-
-    conn.commit()
 
 def format_duration(seconds, avg_days=1):
     # 新增avg_days参数，保留两位小数的小时数
@@ -332,15 +333,15 @@ def query_day(conn, date):
     day_data = cursor.fetchone()
     
     if not day_data:
-        print(f"\n【{date}】\n无相关记录")
+        print(f"\n[{date}]\n无相关记录!")
         return
     
     status, remark, getup = day_data
-    output = [f"\n【{date} 时间统计】"]
-    output.append(f"状态: {status}")
-    output.append(f"起床: {getup}")
+    output = [f"\nDate:{date} "]
+    output.append(f"Status:{status}")
+    output.append(f"Getup:{getup}")
     if remark.strip():
-        output.append(f"备注: {remark}")
+        output.append(f"Remark:{remark}")
     
     cursor.execute('SELECT project_path, duration FROM time_records WHERE date = ?', (date,))
     records = cursor.fetchall()
@@ -369,18 +370,36 @@ def query_day(conn, date):
             current[part]['duration'] += duration
             current = current[part]
     
-    # Print tree
+    # 修改点1: 顶层项目排序
+    sorted_top_level = sorted(
+        tree.items(),
+        key=lambda x: x[1]['duration'],
+        reverse=True
+    )
+
+    # 修改点2: 递归打印函数添加排序逻辑
     def print_subtree(node, indent=0, prefix=""):
         lines = []
-        for key, value in node.items():
-            if key != 'duration':
-                duration = value['duration']
-                name = f"{prefix}{key}" if prefix else key
-                lines.append('  ' * indent + f"{name}: {format_duration(duration)}")
-                lines.extend(print_subtree(value, indent + 1, f"{name}_" if indent > 0 else ""))
+        # 过滤掉'duration'键并按duration降序排序
+        children = [
+            (k, v) for k, v in node.items()
+            if k != 'duration'
+        ]
+        sorted_children = sorted(
+            children,
+            key=lambda x: x[1]['duration'],
+            reverse=True
+        )
+        
+        for key, value in sorted_children:
+            duration = value['duration']
+            name = f"{prefix}{key}" if prefix else key
+            lines.append('  ' * indent + f"{name}: {format_duration(duration)}")
+            lines.extend(print_subtree(value, indent + 1, f"{name}_" if indent > 0 else ""))
         return lines
     
-    for top_level, subtree in tree.items():
+    # 修改点3: 遍历排序后的顶层项目
+    for top_level, subtree in sorted_top_level:
         total_duration = subtree['duration']
         output.append(f"\n{top_level}: {format_duration(total_duration)}")
         output.extend(print_subtree(subtree, 1))
@@ -495,7 +514,6 @@ def query_day_raw(conn, date):
     
     print('\n'.join(output))
 def query_month_summary(conn, year_month):
-    import calendar
     cursor = conn.cursor()
     
     # 解析年月并验证
@@ -537,7 +555,7 @@ def query_month_summary(conn, year_month):
             current[part]['duration'] += duration
             current = current[part]
 
-    output = [f"\n【{year_month} 月统计】"]
+    output = [f"\n[{year_month} 月统计]"]
     
     def print_subtree(node, indent=0, prefix=""):
         lines = []
@@ -599,7 +617,7 @@ def main():
                 query_day_raw(conn, date)
             else:
                 print("日期格式错误")
-        elif choice == '6':  # Handle heatmap generation
+        elif choice == '6':  
             year = input("请输入年份(YYYY):")
             if re.match(r'^\d{4}$', year):
                 output_file = f"heatmap_{year}.html"
@@ -607,13 +625,13 @@ def main():
                 print(f"热力图已生成：{output_file}")
             else:
                 print("年份格式错误")
-        elif choice == '7':  # 新增月统计处理
+        elif choice == '7':  
             year_month = input("请输入年份和月份(如202502):")
             if re.match(r'^\d{6}$', year_month):
                 query_month_summary(conn, year_month)
             else:
                 print("月份格式错误")
-        elif choice == '8':  # 退出选项改为8
+        elif choice == '8':  
             break
         else:
             print("input int num")
