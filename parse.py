@@ -546,13 +546,30 @@ def main():
         choice = input("请选择操作：")
         
         if choice == '0':
-            folder = input("请输入文件目录：")
-            for root, dirs, files in os.walk(folder):
-                for filename in files:
-                    if filename.lower().endswith(".txt"):
-                        filepath = os.path.join(root, filename)
-                        print(f"正在处理文件: {filepath}")
-                        parse_file(conn, filepath)
+            input_path = input("请输入文件或目录路径：").strip('"')  # 移除可能包裹的引号
+            input_path = os.path.normpath(input_path)  # 规范化路径格式
+            
+            # 处理单个文件的情况
+            if os.path.isfile(input_path) and input_path.lower().endswith('.txt'):
+                print(f"\n处理独立文件: {input_path}")
+                parse_file(conn, input_path)
+            
+            # 处理目录的情况
+            elif os.path.isdir(input_path):
+                print(f"\n扫描目录: {input_path}")
+                file_count = 0
+                for root, _, files in os.walk(input_path):
+                    for filename in files:
+                        if filename.lower().endswith('.txt'):
+                            filepath = os.path.join(root, filename)
+                            print(f"发现数据文件: {filepath}")
+                            parse_file(conn, filepath)
+                            file_count += 1
+                print(f"共处理 {file_count} 个数据文件")
+            
+            # 错误路径处理
+            else:
+                print(f"错误路径: {input_path} (请确认输入的是.txt文件或有效目录)")
         elif choice == '1':
             date = input("请输入日期(如YYYYMMDD):")
             if re.match(r'^\d{8}$', date):
