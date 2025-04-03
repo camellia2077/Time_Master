@@ -4,19 +4,165 @@ import os
 from datetime import datetime, timedelta
 from collections import defaultdict
 import calendar
-GITHUB_GREEN_LIGHT = ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39']
-GITHUB_GREEN_DARK = ['#151b23', '#033a16', '#196c2e', '#2ea043', '#56d364']
-BLUE_LIGHT= ['#f7fbff', '#c6dbef', '#6baed6', '#2171b5', '#08306b']
-ORANGE_LIGHT = ['#fff8e1', '#ffe082', '#ffd54f', '#ffb300', '#ff8f00']
-PINK_LIGHT = ['#fce4ec', '#f8bbd0', '#f48fb1', '#f06292', '#ec407a']
-PURPLE_LIGHT = ['#f3e5f5', '#ce93d8', '#ab47bc', '#8e24aa', '#6a1b9a']
-BROWN_LIGHT = ['#efebe9', '#d7ccc8', '#bcaaa4', '#8d6e63', '#6d4c41']
-LAVA_RED_LIGHT = ['#ffebee', '#ffcdd2', '#ef9a9a', '#e57373', '#ef5350']
-GOLD_LIGHT = ['#fff8e1', '#ffe082', '#ffd54f', '#ffb300', '#ff8f00']
-BLOOD_RED_LIGHT = ['#fff5f0', '#fee0d2', '#fc9272', '#de2d26', '#a50f15']
-DEFAULT_COLOR_PALETTE = GITHUB_GREEN_LIGHT
-GOLD = '#FFFF00'
+from colors_config import DEFAULT_COLOR_PALETTE
+from colors_config import GOLD
 
+def return_color(study_time):
+    hours = study_time / 3600
+    if hours == 0:
+        return DEFAULT_COLOR_PALETTE[0]
+    elif hours < 4:
+        return DEFAULT_COLOR_PALETTE[1]
+    elif hours < 8:
+        return DEFAULT_COLOR_PALETTE[2]
+    elif hours < 10:
+        return DEFAULT_COLOR_PALETTE[3]
+    elif hours < 12:
+        return DEFAULT_COLOR_PALETTE[4]
+    else:
+        return GOLD
+def generate_heatmap(conn, year, output_file):
+    from datetime import datetime, timedelta
+    study_times = get_study_times(conn, year)
+    
+    # 设置起止日期
+    start_date = datetime(year, 1, 1)
+    end_date = datetime(year, 12, 31)
+    
+    # 计算前置空白天数（GitHub 热力图从周日开始）
+    first_weekday = start_date.weekday()  # 0=周一, ..., 6=周日
+    front_empty_days = (6 - first_weekday) % 7 if first_weekday != 6 else 0
+    
+    # 计算总天数和后置空白天数
+    total_days = (end_date - start_date).days + 1
+    total_slots = front_empty_days + total_days
+    back_empty_days = (7 - (total_slots % 7)) % 7
+    
+    # 生成 heatmap_data
+    heatmap_data = []
+    # 前置空白天
+    for _ in range(front_empty_days):
+        heatmap_data.append((None, 'empty', 0))
+    # 年份内的天
+    current_date = start_date
+    while current_date <= end_date:
+        date_str = current_date.strftime("%Y%m%d")
+        study_time = study_times.get(date_str, 0)
+        color = return_color(study_time)
+        heatmap_data.append((current_date, color, study_time))
+        current_date += timedelta(days=1)
+    # 后置空白天
+    for _ in range(back_empty_days):
+        heatmap_data.append((None, 'empty', 0))
+    
+    # SVG 设置
+    cell_size = 12  # 方块大小：12x12 像素
+    spacing = 3   # 方块间距：3 像素
+    weeks = 53    # 列数：53 周
+    rows = 7      # 行数：7 天
+    
+    # 调整 SVG 尺寸以容纳标记
+    margin_top = 20  # 顶部留白（用于月份标记）
+    margin_left = 30  # 左侧留白（用于星期标记）
+    width = margin_left + weeks * (cell_size + spacing)
+    height = margin_top + rows * (cell_size + spacing)
+    
+    # 生成 SVG
+    svg = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">']
+    
+    # 添加星期标记（纵坐标）
+    days_of_week = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    for i, day in enumerate(days_of_week):
+        y = margin_top + i * (cell_size + spacing) + cell_size / 2
+        svg.append(f'<text x="0" y="{y}" font-size="10" alignment-baseline="middle">{day}</text>')
+    
+    # 添加月份标记（横坐标）
+    months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    month_positions = []
+    current_month = start_date.month
+    for i, (date, _, _) in enumerate(heatmap_data):
+        if date and date.month != current_month:
+            month_positions.append((current_month, i // 7))
+            current_month = date.month
+    month_positions.append((current_month, len(heatmap_data) // 7))
+    
+    for month, week_index in month_positions:
+        x = margin_left + week_index * (cell_size + spacing)
+        svg.append(f'<text x="{x}" y="{margin_top - 5}" font-size="10" text-anchor="middle">{month}</text>')
+    
+    # 添加方块
+    for i, (date, color, study_time) in enumerate(heatmap_data):
+        if date is not None:  # 只为实际日期生成方块
+            # 计算方块位置
+            week_index = i // 7  # 第几周
+            day_index = i % 7   # 星期几（0=周日, ..., 6=周六）
+            x = margin_left + week_index * (cell_size + spacing)
+            y = margin_top + day_index * (cell_size + spacing)
+            # 格式化学习时间
+            duration_str = time_format_duration(study_time)
+            title_text = f"{date.strftime('%Y-%m-%d')}: {duration_str}"
+            # 添加矩形方块和 <title> 提示
+            svg.append(f'<rect width="{cell_size}" height="{cell_size}" x="{x}" y="{y}" fill="{color}" rx="2" ry="2">')
+            svg.append(f'    <title>{title_text}</title>')
+            svg.append(f'</rect>')
+    
+    svg.append('</svg>')
+    
+    # 生成 HTML 文件
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>GitHub Style Heatmap</title>
+    </head>
+    <body>
+        <div style="padding: 20px;">
+        {''.join(svg)}
+        </div>
+    </body>
+    </html>
+    """
+    with open(output_file, 'w') as f:
+        f.write(html)
+def time_to_seconds(t):
+    try:
+        if not t: return 0
+        h, m = map(int, t.split(':'))
+        return h * 3600 + m * 60
+    except:
+        return 0
+def time_format_duration(seconds, avg_days=1):
+    '''总时间长度和平均长度函数'''
+    # 计算总时长
+    total_hours = seconds // 3600
+    total_minutes = (seconds % 3600) // 60
+    time_str = f"{total_hours}h{total_minutes:02d}m" if total_hours > 0 else f"{total_minutes}m"
+    
+    # 如果 avg_days > 1，计算并格式化平均时长
+    if avg_days > 1:
+        total_h = seconds / 3600  # 总小时数
+        avg_h = total_h / avg_days  # 平均小时数
+        avg_hours = int(avg_h)  # 整数小时部分
+        fractional_hours = avg_h - avg_hours  # 小数小时部分
+        avg_minutes = int(fractional_hours * 60 + 0.5)  # 转换为分钟并四舍五入
+        avg_str = f"{avg_hours}h{avg_minutes:02d}m"  # 平均时长字符串
+        return f"{time_str} ({avg_str}/day)"
+    else:
+        return time_str
+
+def get_study_times(conn, year):
+    cursor = conn.cursor()
+    start_date = f"{year}0101"
+    end_date = f"{year}1231"
+    cursor.execute('''
+        SELECT date, SUM(duration)
+        FROM time_records
+        WHERE date BETWEEN ? AND ?
+        AND (project_path = 'study' OR project_path LIKE 'study_%')
+        GROUP BY date
+    ''', (start_date, end_date))
+    study_times = dict(cursor.fetchall())
+    return study_times
 def init_db():
     conn = sqlite3.connect('time_tracking.db')
     cursor = conn.cursor()
@@ -77,6 +223,7 @@ def init_db():
     conn.commit()
     return conn
 def parse_file(conn, filepath):
+    '''解析文输入的文件'''
     cursor = conn.cursor()
     current_date = None
     day_info = {'status': 'False', 'remark': '', 'getup_time': '00:00'}
@@ -171,173 +318,30 @@ def parse_file(conn, filepath):
                 cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', (child, parent))
 
     conn.commit()
-def get_study_times(conn, year):
-    cursor = conn.cursor()
-    start_date = f"{year}0101"
-    end_date = f"{year}1231"
-    cursor.execute('''
-        SELECT date, SUM(duration)
-        FROM time_records
-        WHERE date BETWEEN ? AND ?
-        AND (project_path = 'study' OR project_path LIKE 'study_%')
-        GROUP BY date
-    ''', (start_date, end_date))
-    study_times = dict(cursor.fetchall())
-    return study_times
-def get_color(study_time):
-    hours = study_time / 3600
-    if hours == 0:
-        return DEFAULT_COLOR_PALETTE[0]
-    elif hours < 4:
-        return DEFAULT_COLOR_PALETTE[1]
-    elif hours < 8:
-        return DEFAULT_COLOR_PALETTE[2]
-    elif hours < 10:
-        return DEFAULT_COLOR_PALETTE[3]
-    elif hours < 12:
-        return DEFAULT_COLOR_PALETTE[4]
-    else:
-        return GOLD
-def generate_heatmap(conn, year, output_file):
-    from datetime import datetime, timedelta
-    study_times = get_study_times(conn, year)
-    
-    # 设置起止日期
-    start_date = datetime(year, 1, 1)
-    end_date = datetime(year, 12, 31)
-    
-    # 计算前置空白天数（GitHub 热力图从周日开始）
-    first_weekday = start_date.weekday()  # 0=周一, ..., 6=周日
-    front_empty_days = (6 - first_weekday) % 7 if first_weekday != 6 else 0
-    
-    # 计算总天数和后置空白天数
-    total_days = (end_date - start_date).days + 1
-    total_slots = front_empty_days + total_days
-    back_empty_days = (7 - (total_slots % 7)) % 7
-    
-    # 生成 heatmap_data
-    heatmap_data = []
-    # 前置空白天
-    for _ in range(front_empty_days):
-        heatmap_data.append((None, 'empty', 0))
-    # 年份内的天
-    current_date = start_date
-    while current_date <= end_date:
-        date_str = current_date.strftime("%Y%m%d")
-        study_time = study_times.get(date_str, 0)
-        color = get_color(study_time)
-        heatmap_data.append((current_date, color, study_time))
-        current_date += timedelta(days=1)
-    # 后置空白天
-    for _ in range(back_empty_days):
-        heatmap_data.append((None, 'empty', 0))
-    
-    # SVG 设置
-    cell_size = 12  # 方块大小：12x12 像素
-    spacing = 3   # 方块间距：3 像素
-    weeks = 53    # 列数：53 周
-    rows = 7      # 行数：7 天
-    
-    # 调整 SVG 尺寸以容纳标记
-    margin_top = 20  # 顶部留白（用于月份标记）
-    margin_left = 30  # 左侧留白（用于星期标记）
-    width = margin_left + weeks * (cell_size + spacing)
-    height = margin_top + rows * (cell_size + spacing)
-    
-    # 生成 SVG
-    svg = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">']
-    
-    # 添加星期标记（纵坐标）
-    days_of_week = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-    for i, day in enumerate(days_of_week):
-        y = margin_top + i * (cell_size + spacing) + cell_size / 2
-        svg.append(f'<text x="0" y="{y}" font-size="10" alignment-baseline="middle">{day}</text>')
-    
-    # 添加月份标记（横坐标）
-    months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-    month_positions = []
-    current_month = start_date.month
-    for i, (date, _, _) in enumerate(heatmap_data):
-        if date and date.month != current_month:
-            month_positions.append((current_month, i // 7))
-            current_month = date.month
-    month_positions.append((current_month, len(heatmap_data) // 7))
-    
-    for month, week_index in month_positions:
-        x = margin_left + week_index * (cell_size + spacing)
-        svg.append(f'<text x="{x}" y="{margin_top - 5}" font-size="10" text-anchor="middle">{month}</text>')
-    
-    # 添加方块
-    for i, (date, color, study_time) in enumerate(heatmap_data):
-        if date is not None:  # 只为实际日期生成方块
-            # 计算方块位置
-            week_index = i // 7  # 第几周
-            day_index = i % 7   # 星期几（0=周日, ..., 6=周六）
-            x = margin_left + week_index * (cell_size + spacing)
-            y = margin_top + day_index * (cell_size + spacing)
-            # 格式化学习时间
-            duration_str = format_duration(study_time)
-            title_text = f"{date.strftime('%Y-%m-%d')}: {duration_str}"
-            # 添加矩形方块和 <title> 提示
-            svg.append(f'<rect width="{cell_size}" height="{cell_size}" x="{x}" y="{y}" fill="{color}" rx="2" ry="2">')
-            svg.append(f'    <title>{title_text}</title>')
-            svg.append(f'</rect>')
-    
-    svg.append('</svg>')
-    
-    # 生成 HTML 文件
-    html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>GitHub Style Heatmap</title>
-    </head>
-    <body>
-        <div style="padding: 20px;">
-        {''.join(svg)}
-        </div>
-    </body>
-    </html>
-    """
-    with open(output_file, 'w') as f:
-        f.write(html)
-def time_to_seconds(t):
-    try:
-        if not t: return 0
-        h, m = map(int, t.split(':'))
-        return h * 3600 + m * 60
-    except:
-        return 0
 
 
-def format_duration(seconds, avg_days=1):
-    # 新增avg_days参数，保留两位小数的小时数
-    total_h = seconds / 3600
-    avg_h = total_h / avg_days if avg_days > 0 else 0
-    
-    # 原始格式保持小时+分钟显示
-    hours = seconds // 3600
-    minutes = (seconds % 3600) // 60
-    
-    # 构建显示字符串
-    time_str = f"{hours}h{minutes:02d}m" if hours else f"{minutes}m"
-    avg_str = f"{avg_h:.2f}h"  # 平均时间统一用小时显示
-    
-    return f"{time_str} ({avg_str}/day)" if avg_days > 1 else time_str
+
+
 def generate_sorted_output(node, avg_days=1, indent=0):
-    """递归生成按时间降序排列的输出行"""
+    """递归生成按时间降序排列的输出行，仅输出有有效数据的子节点"""
     lines = []
-    # 过滤出子节点并按duration降序排序
-    children = [(k, v) for k, v in node.items() if k != 'duration']
+    # 从 'children' 键中获取子项目
+    children = [(k, v) for k, v in node['children'].items()] if 'children' in node else []
+    # 按时长降序排序
     sorted_children = sorted(children, key=lambda x: x[1].get('duration', 0), reverse=True)
     
     for key, value in sorted_children:
         duration = value.get('duration', 0)
-        lines.append('  ' * indent + f"{key}: {format_duration(duration, avg_days)}")
-        # 递归处理子节点
-        lines.extend(generate_sorted_output(value, avg_days, indent + 1))
+        has_children = 'children' in value and value['children']
+        # 仅当 duration > 0 或有子节点时输出
+        if duration > 0 or has_children:
+            lines.append('  ' * indent + f"{key}: {time_format_duration(duration, avg_days)}")
+            # 递归处理子节点
+            if has_children:
+                lines.extend(generate_sorted_output(value, avg_days, indent + 1))
     return lines
 def query_day(conn, date):
+    '''查询某日'''
     cursor = conn.cursor()
     cursor.execute('SELECT status, remark, getup_time FROM days WHERE date = ?', (date,))
     day_data = cursor.fetchone()
@@ -354,7 +358,7 @@ def query_day(conn, date):
     cursor.execute('SELECT project_path, duration FROM time_records WHERE date = ?', (date,))
     records = cursor.fetchall()
     
-    # 新增总时间计算
+    # 计算总时间
     cursor.execute('SELECT SUM(duration) FROM time_records WHERE date = ?', (date,))
     total_duration = cursor.fetchone()[0] or 0
     total_h = total_duration // 3600
@@ -363,29 +367,35 @@ def query_day(conn, date):
     output.append(f"Total: {total_h}h{total_m:02d}m ({total_minutes} minutes)")
     
     if records:
-        tree = defaultdict(lambda: {'duration': 0})
+        # 修改树形结构，添加 'children' 键
+        tree = defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)})
         for project_path, duration in records:
             parts = project_path.split('_')
-            if parts:
-                top_level = 'STUDY' if parts[0].lower() == 'study' else parts[0].upper()
-                tree[top_level]['duration'] += duration
-                current = tree[top_level]
-                for part in parts[1:]:
-                    if part not in current:
-                        current[part] = {'duration': 0}
-                    current[part]['duration'] += duration
-                    current = current[part]
+            if not parts:
+                continue
+            # 处理顶层项目
+            top_level = 'STUDY' if parts[0].lower() == 'study' else parts[0].upper()
+            tree[top_level]['duration'] += duration
+            current = tree[top_level]
+            # 处理子项目
+            for part in parts[1:]:
+                if not isinstance(current['children'].get(part), dict):
+                    current['children'][part] = {'duration': 0, 'children': defaultdict(dict)}
+                current['children'][part]['duration'] += duration
+                current = current['children'][part]
         
         # 按顶层项目总时长排序
         sorted_top_level = sorted(tree.items(), key=lambda x: x[1]['duration'], reverse=True)
         for top_level, subtree in sorted_top_level:
             percentage = (subtree['duration'] / total_duration * 100) if total_duration else 0
-            output.append(f"\n{top_level}: {format_duration(subtree['duration'])} ({percentage:.2f}%)")
-            output.extend(generate_sorted_output(subtree, indent=1))
+            output.append(f"\n{top_level}: {time_format_duration(subtree['duration'])} ({percentage:.2f}%)")
+            # 传递 avg_days=1 以适应单日查询
+            output.extend(generate_sorted_output(subtree, avg_days=1, indent=1))
     
     print('\n'.join(output))
 
 def query_period(conn, days):
+    '''查询最近几天'''
     cursor = conn.cursor()
     end_date = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=days-1)).strftime("%Y%m%d")
@@ -442,11 +452,12 @@ def query_period(conn, days):
     
     for top_level, subtree in sorted_top_level:
         total_duration = subtree['duration']
-        print(f"\n{top_level}: {format_duration(total_duration, days)}")
+        print(f"\n{top_level}: {time_format_duration(total_duration, days)}")
         # 使用统一的排序输出函数
         print('\n'.join(generate_sorted_output(subtree, avg_days=days, indent=1)))
 
 def query_day_raw(conn, date):
+    '''输出一日的原始内容'''
     cursor = conn.cursor()
     
     # 查询基础信息
@@ -484,11 +495,12 @@ def query_day_raw(conn, date):
     
     print('\n'.join(output))
 def query_month_summary(conn, year_month):
+    '''查询某月的数据'''
     cursor = conn.cursor()
     
     # 解析年月并验证
     if not re.match(r'^\d{6}$', year_month):
-        print("月份格式错误，应为YYYYMM")
+        print("月份格式错误,应为YYYYMM")
         return
     
     year = int(year_month[:4])
@@ -534,13 +546,13 @@ def query_month_summary(conn, year_month):
     for top_level, subtree in sorted_top_level:
         total_duration = subtree['duration']
         total += total_duration
-        output.append(f"{top_level}: {format_duration(total_duration, actual_days)}")
+        output.append(f"{top_level}: {time_format_duration(total_duration, actual_days)}")
         # 使用统一的排序输出函数
         output.extend(generate_sorted_output(subtree, avg_days=actual_days, indent=1))
     
     # 显示总平均时间
     total_avg = total/actual_days/3600 if actual_days >0 else 0
-    output.append(f"\n总时间: {format_duration(total)} ({total_avg:.2f}h)")
+    output.append(f"\n总时间: {time_format_duration(total)} ({total_avg:.2f}h)")
     print('\n'.join(output))
 def main():
     conn = init_db()
@@ -611,10 +623,10 @@ def main():
                 query_month_summary(conn, year_month)
             else:
                 print("月份格式错误")
-        elif choice == '8':  # 退出选项改为8
+        elif choice == '8':  
             break
         else:
-            print("input int num")
+            print("请输入选项中的数字")
     
     conn.close()
 
