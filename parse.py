@@ -15,6 +15,7 @@ LAVA_RED_LIGHT = ['#ffebee', '#ffcdd2', '#ef9a9a', '#e57373', '#ef5350']
 GOLD_LIGHT = ['#fff8e1', '#ffe082', '#ffd54f', '#ffb300', '#ff8f00']
 BLOOD_RED_LIGHT = ['#fff5f0', '#fee0d2', '#fc9272', '#de2d26', '#a50f15']
 DEFAULT_COLOR_PALETTE = GITHUB_GREEN_LIGHT
+GOLD = '#FFFF00'
 
 def init_db():
     conn = sqlite3.connect('time_tracking.db')
@@ -191,10 +192,12 @@ def get_color(study_time):
         return DEFAULT_COLOR_PALETTE[1]
     elif hours < 8:
         return DEFAULT_COLOR_PALETTE[2]
-    elif hours < 12:
+    elif hours < 10:
         return DEFAULT_COLOR_PALETTE[3]
-    else:
+    elif hours < 12:
         return DEFAULT_COLOR_PALETTE[4]
+    else:
+        return GOLD
 def generate_heatmap(conn, year, output_file):
     from datetime import datetime, timedelta
     study_times = get_study_times(conn, year)
@@ -351,6 +354,14 @@ def query_day(conn, date):
     cursor.execute('SELECT project_path, duration FROM time_records WHERE date = ?', (date,))
     records = cursor.fetchall()
     
+    # 新增总时间计算
+    cursor.execute('SELECT SUM(duration) FROM time_records WHERE date = ?', (date,))
+    total_duration = cursor.fetchone()[0] or 0
+    total_h = total_duration // 3600
+    total_m = (total_duration % 3600) // 60
+    total_minutes = total_duration // 60
+    output.append(f"Total: {total_h}h{total_m:02d}m ({total_minutes} minutes)")
+    
     if records:
         tree = defaultdict(lambda: {'duration': 0})
         for project_path, duration in records:
@@ -368,7 +379,8 @@ def query_day(conn, date):
         # 按顶层项目总时长排序
         sorted_top_level = sorted(tree.items(), key=lambda x: x[1]['duration'], reverse=True)
         for top_level, subtree in sorted_top_level:
-            output.append(f"\n{top_level}: {format_duration(subtree['duration'])}")
+            percentage = (subtree['duration'] / total_duration * 100) if total_duration else 0
+            output.append(f"\n{top_level}: {format_duration(subtree['duration'])} ({percentage:.2f}%)")
             output.extend(generate_sorted_output(subtree, indent=1))
     
     print('\n'.join(output))
