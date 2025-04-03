@@ -230,10 +230,10 @@ def generate_heatmap(conn, year, output_file):
         heatmap_data.append((None, 'empty', 0))
     
     # SVG 设置
-    cell_size = 12  # 方块大小:12x12 像素
-    spacing = 3   # 方块间距:3 像素
-    weeks = 53    # 列数:53 周
-    rows = 7      # 行数:7 天
+    cell_size = 12  # 方块大小：12x12 像素
+    spacing = 3   # 方块间距：3 像素
+    weeks = 53    # 列数：53 周
+    rows = 7      # 行数：7 天
     
     # 调整 SVG 尺寸以容纳标记
     margin_top = 20  # 顶部留白（用于月份标记）
@@ -334,19 +334,6 @@ def generate_sorted_output(node, avg_days=1, indent=0):
         # 递归处理子节点
         lines.extend(generate_sorted_output(value, avg_days, indent + 1))
     return lines
-def generate_sorted_output(node, avg_days=1, indent=0):
-    """递归生成按时间降序排列的输出行"""
-    lines = []
-    # 过滤出子节点并按duration降序排序
-    children = [(k, v) for k, v in node.items() if k != 'duration']
-    sorted_children = sorted(children, key=lambda x: x[1].get('duration', 0), reverse=True)
-    
-    for key, value in sorted_children:
-        duration = value.get('duration', 0)
-        lines.append('  ' * indent + f"{key}: {format_duration(duration, avg_days)}")
-        # 递归处理子节点
-        lines.extend(generate_sorted_output(value, avg_days, indent + 1))
-    return lines
 def query_day(conn, date):
     cursor = conn.cursor()
     cursor.execute('SELECT status, remark, getup_time FROM days WHERE date = ?', (date,))
@@ -365,7 +352,7 @@ def query_day(conn, date):
     records = cursor.fetchall()
     
     if records:
-        tree = defaultdict(lambda: defaultdict(int))
+        tree = defaultdict(lambda: {'duration': 0})
         for project_path, duration in records:
             parts = project_path.split('_')
             if parts:
@@ -373,6 +360,8 @@ def query_day(conn, date):
                 tree[top_level]['duration'] += duration
                 current = tree[top_level]
                 for part in parts[1:]:
+                    if part not in current:
+                        current[part] = {'duration': 0}
                     current[part]['duration'] += duration
                     current = current[part]
         
@@ -541,26 +530,6 @@ def query_month_summary(conn, year_month):
     total_avg = total/actual_days/3600 if actual_days >0 else 0
     output.append(f"\n总时间: {format_duration(total)} ({total_avg:.2f}h)")
     print('\n'.join(output))
-def process_input(conn, input_path):
-    """处理输入路径，自动判断是目录还是单个txt文件"""
-    if not os.path.exists(input_path):
-        print(f"路径不存在: {input_path}")
-        return
-    
-    if os.path.isdir(input_path):
-        # 处理目录
-        for root, dirs, files in os.walk(input_path):
-            for filename in files:
-                if filename.lower().endswith('.txt'):
-                    filepath = os.path.join(root, filename)
-                    print(f"正在处理文件: {filepath}")
-                    parse_file(conn, filepath)
-    elif os.path.isfile(input_path) and input_path.lower().endswith('.txt'):
-        # 处理单个文件
-        print(f"正在处理文件: {input_path}")
-        parse_file(conn, input_path)
-    else:
-        print("输入路径不是有效的目录或txt文件")
 def main():
     conn = init_db()
     
