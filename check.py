@@ -13,7 +13,6 @@ def validate_time(time_str):
         return False
 
 def check_date_line(line, line_num, errors):
-    """检查Date行格式，返回是否正确"""
     if not line.startswith('Date:'):
         errors.append(f"第{line_num}行错误:Date行缺少冒号")
         return False
@@ -23,12 +22,10 @@ def check_date_line(line, line_num, errors):
     return True
 
 def check_status_line(line, line_num, errors):
-    """检查Status行格式"""
     if not re.fullmatch(r'Status:(True|False)', line):
         errors.append(f"第{line_num}行错误:Status必须为True或False")
 
 def check_getup_line(line, line_num, errors):
-    """检查Getup行格式"""
     if not re.fullmatch(r'Getup:\d{2}:\d{2}', line):
         errors.append(f"第{line_num}行错误:Getup时间格式不正确")
     else:
@@ -37,18 +34,27 @@ def check_getup_line(line, line_num, errors):
             errors.append(f"第{line_num}行错误:Getup时间无效")
 
 def check_remark_line(line, line_num, errors):
-    """检查Remark行格式"""
     if not line.startswith('Remark:'):
         errors.append(f"第{line_num}行错误:Remark格式不正确")
 
 def check_time_line(line, line_num, errors):
-    """检查时间行格式"""
     if not re.match(r'^(\d{2}:\d{2})~(\d{2}:\d{2})[a-zA-Z_-]+$', line):
         errors.append(f"第{line_num}行错误:时间行格式错误")
         return
     time_part = re.findall(r'\d{2}:\d{2}', line)
-    if len(time_part) != 2 or not validate_time(time_part[0]) or not validate_time(time_part[1]):
+    if len(time_part) != 2:
         errors.append(f"第{line_num}行错误:时间值无效")
+        return
+    start_valid = validate_time(time_part[0])
+    end_valid = validate_time(time_part[1])
+    if not (start_valid and end_valid):
+        errors.append(f"第{line_num}行错误:时间值无效")
+        return
+    # 检查小时相同且结束分钟小于开始分钟
+    start_h, start_m = map(int, time_part[0].split(':'))
+    end_h, end_m = map(int, time_part[1].split(':'))
+    if start_h == end_h and end_m < start_m:
+        errors.append(f"第{line_num}行错误:结束时间分钟数小于开始时间分钟数")
 
 def main():
     try:
@@ -67,13 +73,12 @@ def main():
 
         while current_line < total_lines:
             line = lines[current_line]
-            if not line:  # 跳过空行
+            if not line:
                 current_line += 1
                 continue
             
-            if line.startswith('Date'):  # 检查所有以'Date'开头的行
-                if check_date_line(line, current_line + 1, errors):  # Date行正确
-                    # 处理Status、Getup、Remark行
+            if line.startswith('Date'):
+                if check_date_line(line, current_line + 1, errors):
                     for header in ['Status', 'Getup', 'Remark']:
                         current_line += 1
                         if current_line >= total_lines:
@@ -91,14 +96,13 @@ def main():
                         if not current_header.startswith(f"{header}:"):
                             errors.append(f"第{current_line + 1}行错误:缺少或错误的头部 '{header}:'")
                     
-                    # 处理时间行
                     current_line += 1
                     while current_line < total_lines and not lines[current_line].startswith('Date'):
                         time_line = lines[current_line]
                         if time_line:
                             check_time_line(time_line, current_line + 1, errors)
                         current_line += 1
-                else:  # Date行错误，跳过至下一个Date行或文件结束
+                else:
                     current_line += 1
                     while current_line < total_lines and not lines[current_line].startswith('Date'):
                         current_line += 1
