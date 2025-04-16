@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 import calendar
 from colors_config import DEFAULT_COLOR_PALETTE
-from colors_config import GOLD
+from colors_config import YELLOW
 
 def return_color(study_time):
     hours = study_time / 3600
@@ -20,7 +20,7 @@ def return_color(study_time):
     elif hours < 12:
         return DEFAULT_COLOR_PALETTE[4]
     else:
-        return GOLD
+        return YELLOW
 def generate_heatmap(conn, year, output_file):
     from datetime import datetime, timedelta
     study_times = get_study_times(conn, year)
@@ -273,8 +273,8 @@ def parse_file(conn, filepath):
                 elif line.startswith('Getup:'):
                     day_info['getup_time'] = line[6:].strip()
                 elif '~' in line:
-                    # 修改正则表达式允许连字符
-                    match = re.match(r'^(\d+:\d+)~(\d+:\d+)\s*([a-zA-Z_-]+)', line)  # 关键修改点
+                    # 修改正则表达式允许连字符和数字
+                    match = re.match(r'^(\d+:\d+)~(\d+:\d+)\s*([a-zA-Z0-9_-]+)', line) 
                     if not match:
                         print(f"格式错误在 {os.path.basename(filepath)} 第{line_num}行: {line}")
                         continue
