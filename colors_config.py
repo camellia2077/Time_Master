@@ -10,4 +10,4 @@ RED_BLOOD_LIGHT = ['#fff5f0', '#fee0d2', '#fc9272', '#de2d26', '#a50f15']
 LAVA_RED_LIGHT = ['#ffebee', '#ffcdd2', '#ef9a9a', '#e57373', '#ef5350']
 
 DEFAULT_COLOR_PALETTE = GITHUB_GREEN_LIGHT
-GOLD = '#FFFF00'
+YELLOW = '#ffff07'
