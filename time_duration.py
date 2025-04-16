@@ -1,20 +1,31 @@
 import os
 
+#定义文本对应的翻译字典
+EVENT_TRANSLATION_MAP = {
+    "吃饭短": "meal_short",
+    "吃饭中": "meal_medium",
+    "吃饭长": "meal_long",
+    
+    "抖音": "recreation_douyin",
+    "守望先锋":"recreation_game_overwatch",
+    "mix":"recreation_mix",
+    
+
+}
+
 # 用于把快速记录的时间转换成时间段
 def format_time(time_str):
   """将 HHMM 格式的字符串转换为 HH:MM 格式"""
   if len(time_str) == 4 and time_str.isdigit():
     return f"{time_str[:2]}:{time_str[2:]}"
   else:
-    # 如果格式不正确，返回原始字符串或错误标记
-    # 在这种情况下，时间比较可能会失败或给出意外结果，
-    # 但格式检查会在比较前捕获大部分问题。
+    # 如果格式不正确，返回 None 以便后续检查
     print(f"警告：发现无效的时间格式 '{time_str}'")
-    return time_str # 或者返回 None
+    return None # 返回 None 更清晰地表示失败
 
 def process_log_file(input_filepath):
   """
-  读取日志文件，将时间戳转换为时间段，检查时间顺序，并打印结果。
+  读取日志文件，将时间戳转换为时间段，检查时间顺序，翻译事件，并打印结果。
   """
   output_lines = []
   lines_read_successfully = False # 标记是否成功读取了行
@@ -64,22 +75,35 @@ def process_log_file(input_filepath):
       # 两个时间格式都基本有效，提取时间
       start_time_str = current_line[:4]
       end_time_str = next_line[:4]
-      event = next_line[4:] # 事件来自下一行
+      original_event = next_line[4:] # 事件来自下一行
 
       # 2. 时间顺序检查 (将 HHMM 视为整数进行比较)
-      #    int("0911") == 911, int("1026") == 1026
       if int(end_time_str) > int(start_time_str):
-        # 时间顺序正确，格式化并添加到输出
+        # 时间顺序正确，格式化时间
         formatted_start_time = format_time(start_time_str)
         formatted_end_time = format_time(end_time_str)
-        # 确保 format_time 没有返回 None 或其他错误标记（如果做了更严格的错误处理）
+
+        # 确保 format_time 成功返回了格式化后的时间 (不是 None)
         if formatted_start_time and formatted_end_time:
-             output_lines.append(f"{formatted_start_time}~{formatted_end_time}{event}")
+          # --- 新增：进行事件翻译 ---
+          # 使用字典的 get 方法：
+          # 如果 original_event 在字典中，则返回对应的英文值
+          # 如果不在字典中，则返回第二个参数（这里是 original_event 本身）
+          translated_event = EVENT_TRANSLATION_MAP.get(original_event, original_event)
+          # --- 结束新增 ---
+
+          # 使用翻译后的事件构建输出行
+          output_lines.append(f"{formatted_start_time}~{formatted_end_time}{translated_event}")
+        else:
+             # 如果时间格式化失败，这里可以选择跳过或记录错误
+             # format_time 函数内部已经打印了警告，这里不再重复打印
+             pass # 跳过这个时间段的生成
+
       else:
         # 时间顺序错误，打印警告
-        # 调用 format_time 只是为了在警告信息中显示更易读的时间
-        formatted_start_time_warn = format_time(start_time_str)
-        formatted_end_time_warn = format_time(end_time_str)
+        # 尝试格式化时间以用于警告信息，如果失败则使用原始字符串
+        formatted_start_time_warn = format_time(start_time_str) or start_time_str
+        formatted_end_time_warn = format_time(end_time_str) or end_time_str
         print(f"警告：时间顺序错误。第 {i+2} 行的时间 '{formatted_end_time_warn}' ({end_time_str}) "
               f"不大于 第 {i+1} 行的时间 '{formatted_start_time_warn}' ({start_time_str})。已跳过此时间段的生成。")
 
