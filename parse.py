@@ -21,6 +21,7 @@ def return_color(study_time):
         return DEFAULT_COLOR_PALETTE[4]
     else:
         return YELLOW
+
 def generate_heatmap(conn, year, output_file):
     from datetime import datetime, timedelta
     study_times = get_study_times(conn, year)
@@ -79,20 +80,20 @@ def generate_heatmap(conn, year, output_file):
     # 添加月份标记（横坐标）
     months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     month_positions = []
-    current_month = start_date.month
-    for i, (date, _, _) in enumerate(heatmap_data):
-        if date and date.month != current_month:
-            month_positions.append((current_month, i // 7))
-            current_month = date.month
-    month_positions.append((current_month, len(heatmap_data) // 7))
+    current_month_label = start_date.month # Use a different variable name to avoid conflict
+    for i, (date_obj, _, _) in enumerate(heatmap_data): # Renamed date to date_obj
+        if date_obj and date_obj.month != current_month_label:
+            month_positions.append((current_month_label, i // 7))
+            current_month_label = date_obj.month # Use a different variable name
+    month_positions.append((current_month_label, len(heatmap_data) // 7)) # Use a different variable name
     
-    for month, week_index in month_positions:
+    for month_val, week_index in month_positions: # Renamed month to month_val
         x = margin_left + week_index * (cell_size + spacing)
-        svg.append(f'<text x="{x}" y="{margin_top - 5}" font-size="10" text-anchor="middle">{month}</text>')
+        svg.append(f'<text x="{x}" y="{margin_top - 5}" font-size="10" text-anchor="middle">{month_val}</text>') # Renamed month to month_val
     
     # 添加方块
-    for i, (date, color, study_time) in enumerate(heatmap_data):
-        if date is not None:  # 只为实际日期生成方块
+    for i, (date_obj, color, study_time) in enumerate(heatmap_data): # Renamed date to date_obj
+        if date_obj is not None:  # 只为实际日期生成方块
             # 计算方块位置
             week_index = i // 7  # 第几周
             day_index = i % 7   # 星期几（0=周日, ..., 6=周六）
@@ -100,7 +101,7 @@ def generate_heatmap(conn, year, output_file):
             y = margin_top + day_index * (cell_size + spacing)
             # 格式化学习时间
             duration_str = time_format_duration(study_time)
-            title_text = f"{date.strftime('%Y-%m-%d')}: {duration_str}"
+            title_text = f"{date_obj.strftime('%Y-%m-%d')}: {duration_str}" # Renamed date to date_obj
             # 添加矩形方块和 <title> 提示
             svg.append(f'<rect width="{cell_size}" height="{cell_size}" x="{x}" y="{y}" fill="{color}" rx="2" ry="2">')
             svg.append(f'    <title>{title_text}</title>')
@@ -124,6 +125,7 @@ def generate_heatmap(conn, year, output_file):
     """
     with open(output_file, 'w') as f:
         f.write(html)
+
 def time_to_seconds(t):
     try:
         if not t: return 0
@@ -131,6 +133,7 @@ def time_to_seconds(t):
         return h * 3600 + m * 60
     except:
         return 0
+
 def time_format_duration(seconds, avg_days=1):
     '''总时间长度和平均长度函数'''
     # 计算总时长
@@ -163,6 +166,7 @@ def get_study_times(conn, year):
     ''', (start_date, end_date))
     study_times = dict(cursor.fetchall())
     return study_times
+
 def init_db():
     conn = sqlite3.connect('time_tracking.db')
     cursor = conn.cursor()
@@ -172,7 +176,8 @@ def init_db():
             date TEXT PRIMARY KEY,
             status TEXT,
             remark TEXT,
-            getup_time TEXT
+            getup_time TEXT,
+            overnight TEXT  -- 新增 overnight 字段
         );
         
         CREATE TABLE IF NOT EXISTS time_records (
@@ -222,11 +227,13 @@ def init_db():
     
     conn.commit()
     return conn
+
 def parse_file(conn, filepath):
     '''解析文输入的文件'''
     cursor = conn.cursor()
     current_date = None
-    day_info = {'status': 'False', 'remark': '', 'getup_time': '00:00'}
+    # 初始化 day_info，新增 overnight 默认值
+    day_info = {'status': 'False', 'remark': '', 'getup_time': '00:00', 'overnight': 'False'}
     time_records = []
 
     with open(filepath, 'r', encoding='utf-8') as f:
@@ -239,9 +246,9 @@ def parse_file(conn, filepath):
                 if line.startswith('Date:'):
                     if current_date:
                         cursor.execute('''
-                            UPDATE days SET status=?, remark=?, getup_time=?
+                            UPDATE days SET status=?, remark=?, getup_time=?, overnight=?
                             WHERE date=?
-                        ''', (day_info['status'], day_info['remark'], day_info['getup_time'], current_date))
+                        ''', (day_info['status'], day_info['remark'], day_info['getup_time'], day_info['overnight'], current_date))
                         for start, end, project_path, duration in time_records:
                             cursor.execute('''
                                 INSERT OR REPLACE INTO time_records 
@@ -262,12 +269,16 @@ def parse_file(conn, filepath):
                                                        (child, 'STUDY' if child == 'study' else child.upper()))
                                     continue
                                 cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', (child, parent))
-                        day_info = {'status': 'False', 'remark': '', 'getup_time': '00:00'}
+                        # 重置 day_info 和 time_records
+                        day_info = {'status': 'False', 'remark': '', 'getup_time': '00:00', 'overnight': 'False'}
                         time_records = []
                     current_date = line[5:].strip()
-                    cursor.execute('INSERT OR IGNORE INTO days (date) VALUES (?)', (current_date,))
+                    # 在插入新日期时，确保 overnight 字段存在
+                    cursor.execute('INSERT OR IGNORE INTO days (date, overnight) VALUES (?, ?)', (current_date, day_info['overnight']))
                 elif line.startswith('Status:'):
                     day_info['status'] = line[7:].strip()
+                elif line.startswith('Overnight:'): # 新增 Overnight 解析
+                    day_info['overnight'] = line[10:].strip()
                 elif line.startswith('Remark:'):
                     day_info['remark'] = line[7:].strip()
                 elif line.startswith('Getup:'):
@@ -291,11 +302,11 @@ def parse_file(conn, filepath):
                 print(f"错误信息: {str(e)}")
                 continue
 
-    if current_date:
+    if current_date: # 处理文件末尾的最后一条记录
         cursor.execute('''
-            UPDATE days SET status=?, remark=?, getup_time=?
+            UPDATE days SET status=?, remark=?, getup_time=?, overnight=?
             WHERE date=?
-        ''', (day_info['status'], day_info['remark'], day_info['getup_time'], current_date))
+        ''', (day_info['status'], day_info['remark'], day_info['getup_time'], day_info['overnight'], current_date))
         for start, end, project_path, duration in time_records:
             cursor.execute('''
                 INSERT OR REPLACE INTO time_records 
@@ -319,9 +330,6 @@ def parse_file(conn, filepath):
 
     conn.commit()
 
-
-
-
 def generate_sorted_output(node, avg_days=1, indent=0):
     """递归生成按时间降序排列的输出行，仅输出有有效数据的子节点"""
     lines = []
@@ -340,19 +348,22 @@ def generate_sorted_output(node, avg_days=1, indent=0):
             if has_children:
                 lines.extend(generate_sorted_output(value, avg_days, indent + 1))
     return lines
+
 def query_day(conn, date):
     '''查询某日'''
     cursor = conn.cursor()
-    cursor.execute('SELECT status, remark, getup_time FROM days WHERE date = ?', (date,))
+    # 查询时加入 overnight 字段
+    cursor.execute('SELECT status, remark, getup_time, overnight FROM days WHERE date = ?', (date,))
     day_data = cursor.fetchone()
     
     if not day_data:
         print(f"\n[{date}]\n无相关记录!")
         return
     
-    status, remark, getup = day_data
-    output = [f"\nDate:{date}", f"Status:{status}", f"Getup:{getup}"]
-    if remark.strip():
+    status, remark, getup, overnight = day_data # 获取 overnight 数据
+    # 输出 overnight 状态
+    output = [f"\nDate:{date}", f"Status:{status}", f"Overnight:{overnight}", f"Getup:{getup}"]
+    if remark and remark.strip(): # 确保 remark 不为 None 或仅包含空格
         output.append(f"Remark:{remark}")
     
     cursor.execute('SELECT project_path, duration FROM time_records WHERE date = ?', (date,))
@@ -360,34 +371,36 @@ def query_day(conn, date):
     
     # 计算总时间
     cursor.execute('SELECT SUM(duration) FROM time_records WHERE date = ?', (date,))
-    total_duration = cursor.fetchone()[0] or 0
-    total_h = total_duration // 3600
-    total_m = (total_duration % 3600) // 60
-    total_minutes = total_duration // 60
+    total_duration_data = cursor.fetchone() # 修改变量名以避免与内部的 total_duration 冲突
+    total_duration_val = total_duration_data[0] if total_duration_data else 0 # 修改变量名
+
+    total_h = total_duration_val // 3600
+    total_m = (total_duration_val % 3600) // 60
+    total_minutes = total_duration_val // 60
     output.append(f"Total: {total_h}h{total_m:02d}m ({total_minutes} minutes)")
     
     if records:
         # 修改树形结构，添加 'children' 键
         tree = defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)})
-        for project_path, duration in records:
+        for project_path, duration_val in records: # 修改 duration 为 duration_val
             parts = project_path.split('_')
             if not parts:
                 continue
             # 处理顶层项目
             top_level = 'STUDY' if parts[0].lower() == 'study' else parts[0].upper()
-            tree[top_level]['duration'] += duration
+            tree[top_level]['duration'] += duration_val # 修改 duration 为 duration_val
             current = tree[top_level]
             # 处理子项目
             for part in parts[1:]:
                 if not isinstance(current['children'].get(part), dict):
                     current['children'][part] = {'duration': 0, 'children': defaultdict(dict)}
-                current['children'][part]['duration'] += duration
+                current['children'][part]['duration'] += duration_val # 修改 duration 为 duration_val
                 current = current['children'][part]
         
         # 按顶层项目总时长排序
         sorted_top_level = sorted(tree.items(), key=lambda x: x[1]['duration'], reverse=True)
         for top_level, subtree in sorted_top_level:
-            percentage = (subtree['duration'] / total_duration * 100) if total_duration else 0
+            percentage = (subtree['duration'] / total_duration_val * 100) if total_duration_val else 0 # 修改 total_duration
             output.append(f"\n{top_level}: {time_format_duration(subtree['duration'])} ({percentage:.2f}%)")
             # 传递 avg_days=1 以适应单日查询
             output.extend(generate_sorted_output(subtree, avg_days=1, indent=1))
@@ -397,31 +410,34 @@ def query_day(conn, date):
 def query_period(conn, days):
     '''查询最近几天'''
     cursor = conn.cursor()
-    end_date = datetime.now().strftime("%Y%m%d")
-    start_date = (datetime.now() - timedelta(days=days-1)).strftime("%Y%m%d")
+    end_date_obj = datetime.now() # Renamed to avoid conflict
+    start_date_obj = (datetime.now() - timedelta(days=days-1)) # Renamed to avoid conflict
+    end_date_str = end_date_obj.strftime("%Y%m%d") # Renamed to avoid conflict
+    start_date_str = start_date_obj.strftime("%Y%m%d") # Renamed to avoid conflict
+
 
     cursor.execute('''
         SELECT 
             SUM(CASE WHEN status = 'True' THEN 1 ELSE 0 END) as true_count,
             SUM(CASE WHEN status = 'False' THEN 1 ELSE 0 END) as false_count,
-            COUNT(*) as total_days
+            COUNT(*) as total_days_val  -- Renamed total_days to avoid conflict
         FROM days 
         WHERE date BETWEEN ? AND ?
-    ''', (start_date, end_date))
+    ''', (start_date_str, end_date_str)) # Use renamed variables
     
     status_data = cursor.fetchone()
     true_count = status_data[0] or 0
     false_count = status_data[1] or 0
-    total_days = status_data[2] or 0
+    total_days_val = status_data[2] or 0 # Use renamed variable
 
-    print(f"\n[最近{days}天统计]{start_date} - {end_date}")
-    print(f"有效记录天数:{total_days}天")
+    print(f"\n[最近{days}天统计]{start_date_str} - {end_date_str}") # Use renamed variables
+    print(f"有效记录天数:{total_days_val}天") # Use renamed variable
     print("状态分布:")
-    print(f" True: {true_count}天 ({(true_count/total_days*100 if total_days>0 else 0):.1f}%)")
-    print(f" False: {false_count}天 ({(false_count/total_days*100 if total_days>0 else 0):.1f}%)")
+    print(f" True: {true_count}天 ({(true_count/total_days_val*100 if total_days_val>0 else 0):.1f}%)") # Use renamed variable
+    print(f" False: {false_count}天 ({(false_count/total_days_val*100 if total_days_val>0 else 0):.1f}%)") # Use renamed variable
 
     cursor.execute('SELECT project_path, duration FROM time_records WHERE date BETWEEN ? AND ?', 
-                   (start_date, end_date))
+                   (start_date_str, end_date_str)) # Use renamed variables
     records = cursor.fetchall()
     
     if not records:
@@ -430,49 +446,49 @@ def query_period(conn, days):
     
     # Build hierarchical tree
     tree = defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)})
-    for project_path, duration in records:
+    for project_path, duration_val in records: # Renamed duration to duration_val
         parts = project_path.split('_')
         if not parts:
             continue
         
          # 处理顶层项目
         top_level = 'STUDY' if parts[0].lower() == 'study' else parts[0].upper()
-        tree[top_level]['duration'] += duration
+        tree[top_level]['duration'] += duration_val # Renamed duration to duration_val
         
         # 处理子层级
         current = tree[top_level]
         for part in parts[1:]:
             if not isinstance(current['children'].get(part), dict):
                 current['children'][part] = {'duration': 0, 'children': defaultdict(dict)}
-            current['children'][part]['duration'] += duration
+            current['children'][part]['duration'] += duration_val # Renamed duration to duration_val
             current = current['children'][part]
 
     # 按总时长排序顶层项目
     sorted_top_level = sorted(tree.items(), key=lambda x: x[1]['duration'], reverse=True)
     
     for top_level, subtree in sorted_top_level:
-        total_duration = subtree['duration']
-        print(f"\n{top_level}: {time_format_duration(total_duration, days)}")
+        total_duration_period = subtree['duration'] # Renamed total_duration to avoid conflict
+        print(f"\n{top_level}: {time_format_duration(total_duration_period, days)}")
         # 使用统一的排序输出函数
         print('\n'.join(generate_sorted_output(subtree, avg_days=days, indent=1)))
 
-def query_day_raw(conn, date):
+def query_day_raw(conn, date_query): # Renamed date to date_query
     '''输出一日的原始内容'''
     cursor = conn.cursor()
     
-    # 查询基础信息
+    # 查询基础信息, 加入 overnight
     cursor.execute('''
-        SELECT date, status, getup_time, remark 
+        SELECT date, status, getup_time, remark, overnight 
         FROM days 
         WHERE date = ?
-    ''', (date,))
+    ''', (date_query,)) # Use renamed variable
     day_data = cursor.fetchone()
     
     if not day_data:
-        print(f"日期 {date} 无记录")
+        print(f"日期 {date_query} 无记录") # Use renamed variable
         return
     
-    db_date, status, getup, remark = day_data
+    db_date, status, getup, remark, overnight = day_data # 获取 overnight
     
     # 查询时间记录
     cursor.execute('''
@@ -480,20 +496,23 @@ def query_day_raw(conn, date):
         FROM time_records 
         WHERE date = ? 
         ORDER BY start
-    ''', (date,))
+    ''', (date_query,)) # Use renamed variable
     records = cursor.fetchall()
     
     # 构建原始格式输出
     output = []
     output.append(f"Date:{db_date}")
     output.append(f"Status:{status}")
+    output.append(f"Overnight:{overnight}") # 新增 Overnight 输出
     output.append(f"Getup:{getup}")
-    output.append(f"Remark:{remark}")
+    # 确保 remark 不为 None
+    output.append(f"Remark:{remark if remark is not None else ''}")
     
-    for start, end, project in records:
-        output.append(f"{start}~{end}{project}")
+    for start_time, end_time, project in records: # Renamed start and end
+        output.append(f"{start_time}~{end_time}{project}") # Use renamed variables
     
     print('\n'.join(output))
+
 def query_month_summary(conn, year_month):
     '''查询某月的数据'''
     cursor = conn.cursor()
@@ -503,12 +522,12 @@ def query_month_summary(conn, year_month):
         print("月份格式错误,应为YYYYMM")
         return
     
-    year = int(year_month[:4])
-    month = int(year_month[4:6])
-    last_day = calendar.monthrange(year, month)[1]
+    year_val = int(year_month[:4]) # Renamed year
+    month_val = int(year_month[4:6]) # Renamed month
+    last_day = calendar.monthrange(year_val, month_val)[1] # Use renamed variables
     actual_days = last_day  # 实际当月天数
     
-    date_prefix = f"{year}{month:02d}%"
+    date_prefix = f"{year_val}{month_val:02d}%" # Use renamed variables
     cursor.execute('''
         SELECT project_path, SUM(duration)
         FROM time_records
@@ -522,19 +541,19 @@ def query_month_summary(conn, year_month):
         return
 
     tree = defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)})
-    for project_path, duration in records:
+    for project_path, duration_val in records: # Renamed duration
         parts = project_path.split('_')
         if not parts:
             continue
         
         top_level = 'STUDY' if parts[0].lower() == 'study' else parts[0].upper()
-        tree[top_level]['duration'] += duration
+        tree[top_level]['duration'] += duration_val # Use renamed variable
         
         current = tree[top_level]
         for part in parts[1:]:
             if not isinstance(current['children'].get(part), dict):
                 current['children'][part] = {'duration': 0, 'children': defaultdict(dict)}
-            current['children'][part]['duration'] += duration
+            current['children'][part]['duration'] += duration_val # Use renamed variable
             current = current['children'][part]
 
     output = [f"\n[{year_month} 月统计]"]
@@ -542,18 +561,19 @@ def query_month_summary(conn, year_month):
     # 按总时长排序顶层项目
     sorted_top_level = sorted(tree.items(), key=lambda x: x[1].get('duration', 0), reverse=True)
     
-    total = 0
+    total_month_duration = 0 # Renamed total to avoid conflict
     for top_level, subtree in sorted_top_level:
-        total_duration = subtree['duration']
-        total += total_duration
-        output.append(f"{top_level}: {time_format_duration(total_duration, actual_days)}")
+        total_duration_subtree = subtree['duration'] # Renamed total_duration
+        total_month_duration += total_duration_subtree # Use renamed variable
+        output.append(f"{top_level}: {time_format_duration(total_duration_subtree, actual_days)}")
         # 使用统一的排序输出函数
         output.extend(generate_sorted_output(subtree, avg_days=actual_days, indent=1))
     
     # 显示总平均时间
-    total_avg = total/actual_days/3600 if actual_days >0 else 0
-    output.append(f"\n总时间: {time_format_duration(total)} ({total_avg:.2f}h)")
+    total_avg = total_month_duration/actual_days/3600 if actual_days >0 else 0 # Use renamed variable
+    output.append(f"\n总时间: {time_format_duration(total_month_duration)} ({total_avg:.2f}h)") # Use renamed variable
     print('\n'.join(output))
+
 def main():
     conn = init_db()
     
@@ -566,7 +586,7 @@ def main():
         print("5. 输出某天原始数据")
         print("6. 生成热力图")
         print("7. 月统计数据")  
-        print("8. 退出")       
+        print("8. 退出")      
         choice = input("请选择操作：")
         
         if choice == '0':
@@ -577,6 +597,7 @@ def main():
             if os.path.isfile(input_path) and input_path.lower().endswith('.txt'):
                 print(f"\n处理独立文件: {input_path}")
                 parse_file(conn, input_path)
+                print(f"文件 {os.path.basename(input_path)} 处理完成。共处理 1 个 .txt 文件。")
             
             # 处理目录的情况
             elif os.path.isdir(input_path):
@@ -589,38 +610,38 @@ def main():
                             print(f"发现数据文件: {filepath}")
                             parse_file(conn, filepath)
                             file_count += 1
-                print(f"共处理 {file_count} 个数据文件")
+                print(f"目录 {input_path} 处理完成。共处理{file_count}个txt 文件。") 
             
             # 错误路径处理
             else:
                 print(f"错误路径: {input_path} (请确认输入的是.txt文件或有效目录)")
         elif choice == '1':
-            date = input("请输入日期(如YYYYMMDD):")
-            if re.match(r'^\d{8}$', date):
-                query_day(conn, date)
+            date_input = input("请输入日期(如YYYYMMDD):") # Renamed date
+            if re.match(r'^\d{8}$', date_input): # Use renamed variable
+                query_day(conn, date_input) # Use renamed variable
             else:
                 print("日期格式错误")
         elif choice in ('2', '3', '4'):
             days_map = {'2':7, '3':14, '4':30}
             query_period(conn, days_map[choice])
         elif choice == '5':
-            date = input("请输入日期(YYYYMMDD):")
-            if re.match(r'^\d{8}$', date):
-                query_day_raw(conn, date)
+            date_input = input("请输入日期(YYYYMMDD):") # Renamed date
+            if re.match(r'^\d{8}$', date_input): # Use renamed variable
+                query_day_raw(conn, date_input) # Use renamed variable
             else:
                 print("日期格式错误")
         elif choice == '6':  # Handle heatmap generation
-            year = input("请输入年份(YYYY):")
-            if re.match(r'^\d{4}$', year):
-                output_file = f"heatmap_{year}.html"
-                generate_heatmap(conn, int(year), output_file)
+            year_input = input("请输入年份(YYYY):") # Renamed year
+            if re.match(r'^\d{4}$', year_input): # Use renamed variable
+                output_file = f"heatmap_{year_input}.html" # Use renamed variable
+                generate_heatmap(conn, int(year_input), output_file) # Use renamed variable
                 print(f"热力图已生成：{output_file}")
             else:
                 print("年份格式错误")
         elif choice == '7':  # 新增月统计处理
-            year_month = input("请输入年份和月份(如202502):")
-            if re.match(r'^\d{6}$', year_month):
-                query_month_summary(conn, year_month)
+            year_month_input = input("请输入年份和月份(如202502):") # Renamed year_month
+            if re.match(r'^\d{6}$', year_month_input): # Use renamed variable
+                query_month_summary(conn, year_month_input) # Use renamed variable
             else:
                 print("月份格式错误")
         elif choice == '8':  
