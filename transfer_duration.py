@@ -1,16 +1,21 @@
 import os
-
+# 读取日志文件，将时间戳转换为时间段，检查时间顺序，翻译事件，并打印结果
 #定义文本对应的翻译字典
 EVENT_TRANSLATION_MAP = {
-    "吃饭短": "meal_short",
-    "吃饭中": "meal_medium",
-    "吃饭长": "meal_long",
+    "word":"study_english_word",
+
+    "短": "meal_short",
+    "中": "meal_medium",
+    "长": "meal_long",
     
     "抖音": "recreation_douyin",
+    "dy":"recreation_douyin",
     "守望先锋":"recreation_game_overwatch",
     "mix":"recreation_mix",
-    
+    "b":"recreation_bilibili",
 
+
+    "code":"code_time-master",
 }
 
 # 用于把快速记录的时间转换成时间段
