@@ -4,84 +4,116 @@ import sys
 GREEN = "\033[92m"
 RESET = "\033[0m"
 
+# 新增的替换字典
+# 您可以在这里添加更多的替换规则
+TEXT_REPLACEMENT_MAP = {
+    "word":"study_english_word",
+    "单词":"study_english_word",
+    "code":"code_time-master",
+    #REST
+    "rest0":"rest_short",
+    "rest1":"rest_medium",
+    "rest2":"rest_long",
+
+    #ROUTINE
+    "洗澡" : "routine_bath",
+    "快递" : "routine_express",
+    "洗漱" : "routine_grooming",
+    "拉屎" : "routine_toilet",
+
+    "短": "meal_short",
+    "中": "meal_medium",
+    "长": "meal_long",
+    "short": "meal_short",
+    "medium": "meal_medium",
+    "long": "meal_long",
+
+    #RECREATION
+    "zh": "recreation_zhihu",
+    "知乎": "recreation_zhihu",
+    "dy": "recreation_douyin",
+    "抖音": "recreation_douyin",
+    "守望先锋":"recreation_game_overwatch",
+    "bili" : "recreation_bilibili",
+    "mix":"recreation_mix",
+    "b":"recreation_bilibili",
+
+    #REST
+    "撸" : "rest_masturbation",
+
+    "school" : "other_school",
+
+    "有氧" : "exercise_cardio",
+    "无氧" : "exercise_anaerobic",
+}
 def format_time(time_str):
     """Converts a 'HHMM' time string to 'HH:MM' format."""
     if len(time_str) == 4 and time_str.isdigit():
         return f"{time_str[:2]}:{time_str[2:]}"
-    # Fallback for any unexpected time format, though input implies 'HHMM'.
     return time_str
 
 def process_log_data(log_data_str):
     """
-    Processes the structured log data string and prints the formatted output.
+    Processes the structured log data string and prints the formatted output,
+    including text replacement and blank lines between date blocks.
     """
     lines = log_data_str.strip().split('\n')
 
     last_interval_start_raw_time = None
-    # Flag to indicate if the previous event was an initial "醒" printed raw.
     was_previous_event_initial_raw_xing = False
+    # 标志位，用于判断是否是第一个日期块，以便在其后添加空行
+    is_not_first_date_block = False 
 
     for line_content in lines:
         line = line_content.strip()
         if not line:
             continue
 
-        # Check if the line is a date (assumed to be 3 digits as per example)
-        if line.isdigit() and len(line) == 3:
+        if line.isdigit() and len(line) == 3: # Date line
+            if is_not_first_date_block:
+                print() # 在非第一个日期块之前打印一个空行作为分隔
+            
             print(f"{GREEN}{line}{RESET}")
+            is_not_first_date_block = True # 标记已处理过至少一个日期块的头部
+
             # Reset state for the new date block
             last_interval_start_raw_time = None
             was_previous_event_initial_raw_xing = False
-        else: # Event line (e.g., "1523醒")
-            # Basic validation for event line format
+        else: # Event line
             if len(line) < 4 or not line[:4].isdigit():
-                # Skipping malformed lines or handle as an error appropriately
-                # print(f"Warning: Skipping malformed event line: {line}", file=sys.stderr)
                 continue
 
             raw_time = line[:4]
-            text = line[4:]
+            original_text = line[4:]
             current_formatted_time = format_time(raw_time)
+            display_text = TEXT_REPLACEMENT_MAP.get(original_text, original_text)
 
-            if last_interval_start_raw_time is None:
-                # This is the first event in this date block
-                if text == "醒":
-                    # Per example ("415" -> "1523醒"), the first "醒" is printed with raw time.
-                    print(f"{raw_time}{text}")
-                    was_previous_event_initial_raw_xing = True # Mark that initial "醒" occurred.
+            if last_interval_start_raw_time is None: # First event in this date block
+                if original_text == "醒":
+                    print(f"{raw_time}{display_text}")
+                    was_previous_event_initial_raw_xing = True
                     last_interval_start_raw_time = raw_time
-                elif text == "起床":
-                    # Per example ("416" -> "0802起床"), "起床" is printed with formatted time.
-                    print(f"{current_formatted_time}{text}")
-                    last_interval_start_raw_time = raw_time
-                    # "起床" does not trigger the new special handling for the next line.
-                    was_previous_event_initial_raw_xing = False
-                else:
-                    # Case: First event is neither "醒" nor "起床".
-                    # Example does not cover this. Defaulting to print it as a point event.
-                    # Its time will be the start for the next interval.
-                    print(f"{current_formatted_time}{text}")
+                elif original_text == "起床":
+                    print(f"{current_formatted_time}{display_text}")
                     last_interval_start_raw_time = raw_time
                     was_previous_event_initial_raw_xing = False
-            else:
-                # Not the first event in the block
+                else: # Other first event
+                    print(f"{current_formatted_time}{display_text}")
+                    last_interval_start_raw_time = raw_time
+                    was_previous_event_initial_raw_xing = False
+            else: # Not the first event in the block
                 if was_previous_event_initial_raw_xing:
-                    # This event immediately follows an initial raw "醒".
-                    # Print it as a zero-duration interval using its own text.
-                    # e.g., "1523醒" was previous, current is "1536mix".
-                    # Output: "15:36~15:36mix"
-                    print(f"{current_formatted_time}~{current_formatted_time}{text}")
-                    
+                    print(f"{current_formatted_time}~{current_formatted_time}{display_text}")
                     last_interval_start_raw_time = raw_time
-                    was_previous_event_initial_raw_xing = False # This special condition is now handled.
-                
+                    was_previous_event_initial_raw_xing = False
                 else:
-                    # This is a standard interval: StartPrevFormatted~EndCurrentFormatted TextCurrent
-                    # (Or it follows "起床" or another non-initial-raw-"醒" event)
                     start_formatted_time = format_time(last_interval_start_raw_time)
-                    print(f"{start_formatted_time}~{current_formatted_time}{text}")
-                    last_interval_start_raw_time = raw_time # Current event's time is start for the next.
-                    # was_previous_event_initial_raw_xing remains False
+                    print(f"{start_formatted_time}~{current_formatted_time}{display_text}")
+                    last_interval_start_raw_time = raw_time
+    
+    # (可选) 如果需要在整个输出的最后也添加一个空行，即使后面没有更多日期
+    # if is_not_first_date_block: # 确保至少处理了一些内容
+    #     print() # 这会确保在所有内容之后有一个空行
 
 if __name__ == '__main__':
     file_path = input("请输入txt文件名: ")
