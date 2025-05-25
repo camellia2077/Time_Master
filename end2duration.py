@@ -14,21 +14,14 @@ class LogProcessor:
     YELLOW = "\033[93m"  # Added for Getup:null
     RESET = "\033[0m"
 
-    # 移除了硬编码的 TEXT_REPLACEMENT_MAP
-    # 它将在 __init__ 中作为实例变量加载
-
     def __init__(self, year: int = 2025, replacement_map_file: str = "end2duration.json"):
         self.year_to_use = year
-        # 用于处理单个日期块内事件的状态变量
         self._last_interval_start_raw_time = None
         self._was_previous_event_initial_raw_xing = False
-        # 用于管理 process_log_data 中日期块之间换行的状态变量
         self._printed_at_least_one_block = False
-        # 加载文本替换映射
         self.TEXT_REPLACEMENT_MAP = self._load_replacement_map(replacement_map_file)
 
     def _load_replacement_map(self, file_path: str) -> dict:
-        """从指定的JSON文件加载文本替换映射。"""
         if not os.path.exists(file_path):
             print(f"警告: 文本替换映射文件 '{file_path}' 未找到。将使用空的替换映射。", file=sys.stderr)
             return {}
@@ -53,25 +46,40 @@ class LogProcessor:
         return time_str
 
     def _reset_date_block_processing_state(self):
-        """重置处理单个日期块内事件的特定状态变量。"""
         self._last_interval_start_raw_time = None
         self._was_previous_event_initial_raw_xing = False
 
     def _process_and_print_date_block(self, date_line_content: str, event_lines_content: list):
-        # 1. 格式化日期字符串
-        month_char = date_line_content[0]
-        day_chars = date_line_content[1:]
-        formatted_month_str = f"{int(month_char):02d}"
-        formatted_day_str = f"{int(day_chars):02d}"
+        # 1. 格式化日期字符串 (MODIFIED for 4-digit date)
+        # Assumes date_line_content is MMDD, e.g., "0115" for Jan 15
+        if len(date_line_content) == 4 and date_line_content.isdigit():
+            month_chars = date_line_content[0:2]
+            day_chars = date_line_content[2:4]
+            try:
+                # Validate month and day (optional but good practice)
+                month_int = int(month_chars)
+                day_int = int(day_chars)
+                # Basic validation, more complex validation (days in month) could be added
+                if not (1 <= month_int <= 12 and 1 <= day_int <= 31):
+                    print(f"警告: 无效的日期部分 '{date_line_content}'. 跳过此日期块。", file=sys.stderr)
+                    return
+                formatted_month_str = f"{month_int:02d}"
+                formatted_day_str = f"{day_int:02d}"
+            except ValueError:
+                print(f"警告: 无法将日期部分 '{date_line_content}' 解析为数字。跳过此日期块。", file=sys.stderr)
+                return
+        else:
+            # This case should ideally not be reached if process_log_data filters correctly
+            print(f"警告: 日期行格式无效 '{date_line_content}'. 跳过此日期块。", file=sys.stderr)
+            return
+
         formatted_date_output_str = f"Date:{self.year_to_use}{formatted_month_str}{formatted_day_str}"
         
-        # 2. 初始化事件处理所需变量
         day_has_study_event = False
         event_related_output_lines = [] 
         
         self._reset_date_block_processing_state()
 
-        # 3. 根据实际的第一个事件决定并添加 Getup/Remark 行
         is_first_event_actual_getup_type = False
         first_event_true_formatted_time = None
 
@@ -91,39 +99,30 @@ class LogProcessor:
             event_related_output_lines.append(f"Getup:{self.YELLOW}null{self.RESET}")
             event_related_output_lines.append("Remark:")
 
-        # 4. 处理所有事件行以记录活动并检查 "study"
         start_processing_from_index = 0
         if is_first_event_actual_getup_type:
             consumed_event_raw_time = event_lines_content[0][:4]
             consumed_event_original_text = event_lines_content[0][4:]
-
             self._last_interval_start_raw_time = consumed_event_raw_time
-            if consumed_event_original_text == "醒":
-                self._was_previous_event_initial_raw_xing = True
-            else:
-                self._was_previous_event_initial_raw_xing = False
+            self._was_previous_event_initial_raw_xing = (consumed_event_original_text == "醒")
             
-            # 使用 self.TEXT_REPLACEMENT_MAP
             consumed_display_text = self.TEXT_REPLACEMENT_MAP.get(consumed_event_original_text, consumed_event_original_text)
             if "study" in consumed_display_text:
                 day_has_study_event = True
-            
             start_processing_from_index = 1
 
         for i in range(start_processing_from_index, len(event_lines_content)):
             event_line_str = event_lines_content[i]
-            
             raw_time = event_line_str[:4]
             original_text = event_line_str[4:]
             current_formatted_time = self._format_time(raw_time)
-            # 使用 self.TEXT_REPLACEMENT_MAP
             display_text = self.TEXT_REPLACEMENT_MAP.get(original_text, original_text)
 
             if "study" in display_text:
                 day_has_study_event = True
             
-            if self._last_interval_start_raw_time is None:
-                event_related_output_lines.append(f"{current_formatted_time}{display_text}")
+            if self._last_interval_start_raw_time is None: # Should only happen if the first event wasn't a "getup" type
+                event_related_output_lines.append(f"{current_formatted_time}{display_text}") # This assumes first non-getup event is a start point
                 self._last_interval_start_raw_time = raw_time
                 self._was_previous_event_initial_raw_xing = False 
             else: 
@@ -132,7 +131,6 @@ class LogProcessor:
                 self._was_previous_event_initial_raw_xing = False 
                 self._last_interval_start_raw_time = raw_time
         
-        # 5. 打印日期，然后是状态，最后是所有与事件相关的行
         print(formatted_date_output_str)
         if day_has_study_event:
             print(f"{self.GREEN}Status:True{self.RESET}")
@@ -154,7 +152,8 @@ class LogProcessor:
             if not line:
                 continue
 
-            if line.isdigit() and (len(line) == 2 or len(line) == 3):
+            # MODIFIED: Check for 4-digit date lines
+            if line.isdigit() and len(line) == 4: # e.g., "0115" for Jan 15
                 if current_date_raw_content is not None: 
                     if self._printed_at_least_one_block: 
                         print() 
@@ -164,12 +163,15 @@ class LogProcessor:
                 current_date_raw_content = line
                 current_event_lines_for_block = []
             else:  
+                # This assumes event lines start with 4 digits for time
                 if len(line) >= 4 and line[:4].isdigit():
-                     current_event_lines_for_block.append(line)
+                    current_event_lines_for_block.append(line)
+                # Optional: else: print(f"Skipping unrecognized line format: {line}", file=sys.stderr)
+
 
         if current_date_raw_content is not None:
             if self._printed_at_least_one_block:
-                 print()
+                print()
             self._process_and_print_date_block(current_date_raw_content, current_event_lines_for_block)
 
 if __name__ == '__main__':
@@ -178,9 +180,9 @@ if __name__ == '__main__':
         with open(file_path, 'r', encoding='utf-8') as file:
             input_data = file.read()
         
-        # 您可以在这里传递不同的替换映射文件名，如果需要的话：
-        # processor = LogProcessor(replacement_map_file="custom_map.json")
-        processor = LogProcessor() # 将使用默认的 "text_replacement_map.json"
+        # Example of using a specific year and replacement map
+        # processor = LogProcessor(year=2024, replacement_map_file="custom_map.json")
+        processor = LogProcessor() # Uses default year 2025 and "end2duration.json"
         processor.process_log_data(input_data)
 
     except FileNotFoundError:
