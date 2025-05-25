@@ -13,12 +13,34 @@ class LogProcessor:
     RESET = "\033[0m"
 
     TEXT_REPLACEMENT_MAP = {
-        "word":"study_english_word",
-        # 您可以在这里扩展替换字典，当前根据您的最新提示，只保留了word的例子
-        # 例如：
-        # "单词":"study_english_word",
-        # "code":"code_time-master",
-        # ... 等等
+        "word":"study_english_word", # 第一个 "word" 条目是多余的，已移除
+        "单词":"study_english_word",
+        "code":"code_time-master",
+        "rest0":"rest_short",
+        "rest1":"rest_medium",
+        "rest2":"rest_long",
+        "洗澡" : "routine_bath",
+        "快递" : "routine_express",
+        "洗漱" : "routine_grooming",
+        "拉屎" : "routine_toilet",
+        "meal0": "meal_short",
+        "meal1": "meal_medium",
+        "meal2": "meal_long",
+        "zh": "recreation_zhihu",
+        "知乎": "recreation_zhihu",
+        "dy": "recreation_douyin",
+        "抖音": "recreation_douyin",
+        "守望先锋":"recreation_game_overwatch",
+        "ow":"recreation_game_overwatch",
+        "bili" : "recreation_bilibili",
+        "mix":"recreation_mix",
+        "b":"recreation_bilibili",
+        "电影" : "recreation_movie",
+        "撸" : "rest_masturbation",
+        "school" : "other_school",
+        "有氧" : "exercise_cardio",
+        "无氧" : "exercise_anaerobic",
+        "运动" : "exercise_both",
     }
 
     def __init__(self, year: int = 2025):
@@ -43,9 +65,16 @@ class LogProcessor:
 
     def _process_and_print_date_block(self, date_line_content: str, event_lines_content: list):
         # 1. 格式化日期字符串
-        month_str = date_line_content[0]
-        day_str = date_line_content[1:]
-        formatted_date_output_str = f"Date:{self.year_to_use}{int(month_str):02d}{day_str}"
+        # 假设 date_line_content 已经是2位或3位数字
+        # 月份是第一个字符，日期是剩余的字符
+        month_char = date_line_content[0]
+        day_chars = date_line_content[1:]
+
+        # 格式化月份和日期，确保各占两位，不足补零
+        formatted_month_str = f"{int(month_char):02d}"
+        formatted_day_str = f"{int(day_chars):02d}" # 例如 '1' -> "01", '23' -> "23"
+
+        formatted_date_output_str = f"Date:{self.year_to_use}{formatted_month_str}{formatted_day_str}"
         
         # 2. 初始化事件处理所需变量
         day_has_study_event = False
@@ -146,7 +175,8 @@ class LogProcessor:
             if not line:
                 continue
 
-            if line.isdigit() and len(line) == 3:  # 新的日期行
+            # ***** 修改点在这里 *****
+            if line.isdigit() and (len(line) == 2 or len(line) == 3):  # 新的日期行 (接受2位或3位) [cite: 1]
                 if current_date_raw_content is not None: # 处理先前收集的块
                     if self._printed_at_least_one_block: # 如果不是第一个要打印的块，则添加换行符
                         print() 
