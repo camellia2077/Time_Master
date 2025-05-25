@@ -48,9 +48,6 @@ def load_app_config(file_path):
     print(f"配置已从 '{file_path}' 加载。")
     return True # 表示加载成功
 
-# --- 您的其他函数定义 (validate_time, check_date_line, 等等) ---
-# 这些函数不需要改变，因为它们现在会使用全局的 PARENT_CATEGORIES 和 DISALLOWED_STANDALONE_CATEGORIES
-
 def validate_time(time_str):
     try:
         hh, mm = time_str.split(':')
@@ -94,7 +91,6 @@ def check_time_line(line, line_num, errors):
         return
 
     start_time_str, end_time_str, activity_label = match.groups()
-
     error_added_for_label_check = False 
 
     if activity_label in DISALLOWED_STANDALONE_CATEGORIES:
@@ -114,11 +110,10 @@ def check_time_line(line, line_num, errors):
             all_examples = []
             for children in PARENT_CATEGORIES.values():
                 all_examples.extend(list(children))
-            if all_examples: # 只有在 PARENT_CATEGORIES 非空时才显示示例
-                 errors.append(f"第{line_num}行错误:无效的文本内容 '{activity_label}'。它不属于任何已定义的类别 (如 'code_', 'routine_') 或并非这些类别下允许的具体活动。允许的具体活动例如: {', '.join(sorted(all_examples)[:3])} 等。")
-            else: # 如果 PARENT_CATEGORIES 为空（比如配置文件加载失败）
-                 errors.append(f"第{line_num}行错误:无效的文本内容 '{activity_label}'。没有定义允许的活动类别。")
-
+            if all_examples: 
+                errors.append(f"第{line_num}行错误:无效的文本内容 '{activity_label}'。它不属于任何已定义的类别 (如 'code_', 'routine_') 或并非这些类别下允许的具体活动。允许的具体活动例如: {', '.join(sorted(all_examples)[:3])} 等。")
+            else: 
+                errors.append(f"第{line_num}行错误:无效的文本内容 '{activity_label}'。没有定义允许的活动类别。")
 
     start_valid = validate_time(start_time_str)
     end_valid = validate_time(end_time_str)
@@ -136,113 +131,144 @@ def check_time_line(line, line_num, errors):
     if start_h == end_h and end_m < start_m:
         errors.append(f"第{line_num}行错误:当小时相同时，结束时间分钟数({end_m:02d})不应小于开始时间分钟数({start_m:02d})")
 
+def process_file_and_validate(file_path):
+    """
+    Reads and validates the content of the given file according to predefined rules.
 
-def main():
-    # 在 main 函数开始时加载配置
-    if not load_app_config(CONFIG_FILE_PATH):
-        # 如果配置加载失败，可以选择是否继续执行或直接退出
-        # print("关键配置加载失败，程序无法继续。")
-        # return # 如果希望在配置失败时退出，可以取消此行注释
-        # 如果选择不退出，PARENT_CATEGORIES 会是空的，check_time_line 会报告所有标签无效
-        pass
+    Args:
+        file_path (str): The path to the text file to be validated.
 
-
+    Returns:
+        list: A list of error messages. Returns an empty list if the file is valid.
+              Returns None if the file cannot be read (e.g., FileNotFoundError).
+    """
+    errors = []
     try:
-        errors = []
-        file_path = input("请输入文本文件的路径:")
-        process_start_time = time.perf_counter()
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                lines = [line.strip() for line in f.readlines()]
-        except FileNotFoundError:
-            print(f"错误: 文件 '{file_path}' 未找到。")
-            return
-        except Exception as e:
-            print(f"读取文件 '{file_path}' 时发生错误: {e}")
-            return
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = [line.strip() for line in f.readlines()]
+    except FileNotFoundError:
+        print(f"错误: 文件 '{file_path}' 未找到。")
+        return None
+    except Exception as e:
+        print(f"读取文件 '{file_path}' 时发生错误: {e}")
+        return None
 
-        current_line_idx = 0
-        total_lines = len(lines)
-        processed_any_valid_date_header = False
+    current_line_idx = 0
+    total_lines = len(lines)
+    processed_any_valid_date_header = False
 
-        while current_line_idx < total_lines:
-            line_number_for_report = current_line_idx + 1
-            line = lines[current_line_idx]
+    while current_line_idx < total_lines:
+        line_number_for_report = current_line_idx + 1
+        line = lines[current_line_idx]
 
-            if not line: 
-                current_line_idx += 1
-                continue
-            
-            if line.startswith('Date:'):
-                processed_any_valid_date_header = True
-                if check_date_line(line, line_number_for_report, errors):
-                    expected_headers = ['Status', 'Getup', 'Remark']
-                    header_check_ok = True
-                    for i, header_name in enumerate(expected_headers):
-                        current_line_idx += 1
-                        header_line_number_for_report = current_line_idx + 1
-                        if current_line_idx >= total_lines:
-                            errors.append(f"文件在第{line_number_for_report - (i + 1)}行的Date块后意外结束，缺少 {header_name} 行。")
-                            header_check_ok = False
-                            break 
+        if not line: 
+            current_line_idx += 1
+            continue
+        
+        if line.startswith('Date:'):
+            processed_any_valid_date_header = True
+            is_date_line_structurally_valid = check_date_line(line, line_number_for_report, errors)
 
-                        current_header_line = lines[current_line_idx]
-                        if not current_header_line.startswith(f"{header_name}:"):
-                            errors.append(f"第{header_line_number_for_report}行错误:应为 '{header_name}:' 开头，实际为 '{current_header_line[:30]}...'")
-                            header_check_ok = False
-                        
-                        if header_name == 'Status':
-                            check_status_line(current_header_line, header_line_number_for_report, errors)
-                        elif header_name == 'Getup':
-                            check_getup_line(current_header_line, header_line_number_for_report, errors)
-                        elif header_name == 'Remark':
-                            check_remark_line(current_header_line, header_line_number_for_report, errors)
+            if is_date_line_structurally_valid:
+                expected_headers = ['Status', 'Getup', 'Remark']
+                header_check_ok = True
+                date_block_start_line_number = line_number_for_report 
+
+                for i, header_name in enumerate(expected_headers):
+                    current_line_idx += 1 
+                    header_line_number_for_report = current_line_idx + 1
+
+                    if current_line_idx >= total_lines:
+                        errors.append(f"文件在第{date_block_start_line_number}行的Date块后意外结束，缺少 {header_name} 行。")
+                        header_check_ok = False
+                        break  
+
+                    current_header_line = lines[current_line_idx]
+                    if not current_header_line.startswith(f"{header_name}:"):
+                        errors.append(f"第{header_line_number_for_report}行错误:应为 '{header_name}:' 开头，实际为 '{current_header_line[:30]}...'")
+                        header_check_ok = False
                     
-                    if header_check_ok:
-                        current_line_idx += 1 
-                        while current_line_idx < total_lines and (not lines[current_line_idx].startswith('Date:')):
-                            time_line_number_for_report = current_line_idx + 1
-                            time_line = lines[current_line_idx]
-                            if time_line: 
-                                check_time_line(time_line, time_line_number_for_report, errors)
-                            current_line_idx += 1
-                        continue 
-                    else: 
-                        if current_line_idx < total_lines and not lines[current_line_idx].startswith('Date:'): # 确保指针推进
-                             current_line_idx +=1 
-                        continue 
-                else: 
-                    errors.append(f"第{line_number_for_report}行错误: Date行格式不正确，尝试查找下一个Date块。")
-                    current_line_idx += 1
-                    while current_line_idx < total_lines and not lines[current_line_idx].startswith('Date:'):
+                    if header_name == 'Status':
+                        check_status_line(current_header_line, header_line_number_for_report, errors)
+                    elif header_name == 'Getup':
+                        check_getup_line(current_header_line, header_line_number_for_report, errors)
+                    elif header_name == 'Remark':
+                        check_remark_line(current_header_line, header_line_number_for_report, errors)
+                
+                if header_check_ok:
+                    current_line_idx += 1  
+                    while current_line_idx < total_lines and (not lines[current_line_idx].startswith('Date:')):
+                        time_line_number_for_report = current_line_idx + 1
+                        time_line = lines[current_line_idx]
+                        if time_line: 
+                            check_time_line(time_line, time_line_number_for_report, errors)
                         current_line_idx += 1
                     continue 
+                else: 
+                    if current_line_idx < total_lines and not lines[current_line_idx].startswith('Date:'):
+                        current_line_idx += 1 
+                    continue 
             else: 
-                if not processed_any_valid_date_header and line: 
-                     errors.append(f"第{line_number_for_report}行错误: 文件应以 'Date:YYYYMMDD' 格式的行开始。当前行为: '{line[:50]}...'")
-                     processed_any_valid_date_header = True 
-                elif line : 
-                    errors.append(f"第{line_number_for_report}行错误: 意外的内容，此处应为新的 'Date:' 块。内容: '{line[:50]}...'")
-                current_line_idx += 1
+                errors.append(f"第{line_number_for_report}行错误: Date行格式不正确，尝试查找下一个Date块。")
+                current_line_idx += 1 
+                while current_line_idx < total_lines and not lines[current_line_idx].startswith('Date:'):
+                    current_line_idx += 1 
+                continue 
+        else: 
+            if not processed_any_valid_date_header and line: 
+                errors.append(f"第{line_number_for_report}行错误: 文件应以 'Date:YYYYMMDD' 格式的行开始。当前行为: '{line[:50]}...'")
+                processed_any_valid_date_header = True 
+            elif line : 
+                errors.append(f"第{line_number_for_report}行错误: 意外的内容，此处应为新的 'Date:' 块。内容: '{line[:50]}...'")
+            current_line_idx += 1 
+    return errors
 
-        if errors:
+def handle_file_processing_and_reporting():
+    """
+    Handles user input for file path, calls validation, reports results, and times the process.
+    """
+    process_start_time = None 
+    try:
+        file_path = input("请输入文本文件的路径:")
+        process_start_time = time.perf_counter()
+
+        validation_errors = process_file_and_validate(file_path)
+
+        if validation_errors is None:
+            # File reading error occurred; message already printed by process_file_and_validate.
+            pass
+        elif validation_errors: # Errors were found during validation
             print("\n发现以下错误:")
-            unique_errors = sorted(list(set(errors)), key=lambda x: int(re.search(r'第(\d+)行', x).group(1)) if re.search(r'第(\d+)行', x) else 0)
+            # Sort errors by line number for readability
+            unique_errors = sorted(list(set(validation_errors)), key=lambda x: int(re.search(r'第(\d+)行', x).group(1)) if re.search(r'第(\d+)行', x) else 0)
             for error in unique_errors:
                 print(f"\n{error}")
-        else:
+        else: # No errors found (validation_errors is an empty list)
             print("\n文件格式完全正确！")
 
-    except Exception as e:
+    except Exception as e: # Catches errors from input() or other unexpected issues
         print(f"\n程序执行过程中发生致命错误: {e}")
         import traceback
         traceback.print_exc()
     finally:
         process_end_time = time.perf_counter()
-        if 'process_start_time' in locals() and isinstance(process_start_time, float):
+        if process_start_time is not None: # Check if timing actually started
             print(f"\n处理时间:{process_end_time - process_start_time:.6f}秒")
         else:
             print(f"\n处理时间: 无法计算 (计时可能未开始或过早出错)")
+
+def main():
+    """
+    Main function to run the script.
+    Loads application configuration and then handles file processing and reporting.
+    """
+    if not load_app_config(CONFIG_FILE_PATH):
+        # Configuration loading failed. The load_app_config function already printed an error.
+        # Depending on requirements, you might want to exit here or allow proceeding with empty config.
+        # Current script behavior is to proceed (pass).
+        pass
+
+    handle_file_processing_and_reporting()
 
 if __name__ == "__main__":
     main()
