@@ -197,9 +197,9 @@ def main():
             # 去重并按行号排序错误信息（近似，因为错误信息包含行号）
             unique_errors = sorted(list(set(errors)), key=lambda x: int(re.search(r'第(\d+)行', x).group(1)) if re.search(r'第(\d+)行', x) else 0)
             for error in unique_errors:
-                print(error)
+                print(f"\n{error}")
         else:
-            print("\n文件格式完全正确！")
+            print("\n文件格式没有错误")
 
     except Exception as e:
         print(f"\n程序执行过程中发生致命错误: {e}")
