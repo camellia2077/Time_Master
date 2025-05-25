@@ -3,6 +3,12 @@ import time
 import json # 导入 json 模块
 import os   # 导入 os 模块，用于检查文件是否存在
 
+
+class Colors:
+    GREEN = '\033[92m'  # 亮绿色
+    # RED = '\033[91m'    # 亮红色 (如果需要用于错误信息)
+    # YELLOW = '\033[93m' # 亮黄色 (如果需要用于警告)
+    RESET = '\033[0m'   # 重置颜色
 # 定义配置文件的路径 (remains a global constant or could be part of App setup)
 CONFIG_FILE_PATH = "check_input_config.json"
 
@@ -16,7 +22,6 @@ class ConfigManager:
         """从JSON文件加载配置并填充实例属性"""
         if not os.path.exists(self.config_file_path):
             print(f"错误: 配置文件 '{self.config_file_path}' 未找到。程序将使用空配置退出。")
-            # self.parent_categories and self.disallowed_standalone_categories remain empty as initialized
             return False
 
         try:
@@ -30,14 +35,13 @@ class ConfigManager:
             return False
 
         parent_categories_from_json = config_data.get("PARENT_CATEGORIES", {})
-
         loaded_parent_categories_temp = {}
         for category, labels_list in parent_categories_from_json.items():
             if isinstance(labels_list, list):
                 loaded_parent_categories_temp[category] = set(labels_list)
             else:
                 print(f"警告: 配置文件中类别 '{category}' 的标签格式不正确 (应为列表)，已忽略此类别。")
-                loaded_parent_categories_temp[category] = set() # Ensure category is added with empty set
+                loaded_parent_categories_temp[category] = set()
 
         self.parent_categories = loaded_parent_categories_temp
         self.disallowed_standalone_categories = set(self.parent_categories.keys())
@@ -139,7 +143,6 @@ class FileProcessor:
     def process_and_validate_file_contents(self, file_path):
         """
         Reads and validates the content of the given file according to predefined rules.
-        This method was previously the top-level process_file_and_validate function.
         """
         errors = []
         try:
@@ -147,10 +150,10 @@ class FileProcessor:
                 lines = [line.strip() for line in f.readlines()]
         except FileNotFoundError:
             print(f"错误: 文件 '{file_path}' 未找到。")
-            return None # Indicates file not found
+            return None
         except Exception as e:
             print(f"读取文件 '{file_path}' 时发生错误: {e}")
-            return None # Indicates other file reading error
+            return None
 
         current_line_idx = 0
         total_lines = len(lines)
@@ -186,131 +189,157 @@ class FileProcessor:
                         if not current_header_line.startswith(f"{header_name}:"):
                             errors.append(f"第{header_line_number_for_report}行错误:应为 '{header_name}:' 开头，实际为 '{current_header_line[:30]}...'")
                             header_check_ok = False
-                            # Don't break here, continue checking other headers for more complete error reporting for this block if possible,
-                            # but be mindful that subsequent checks might be on wrong lines.
-                            # The logic to skip to next 'Date:' block handles this.
-
+                        
                         if header_name == 'Status':
                             self.validator.check_status_line(current_header_line, header_line_number_for_report, errors)
                         elif header_name == 'Getup':
                             self.validator.check_getup_line(current_header_line, header_line_number_for_report, errors)
                         elif header_name == 'Remark':
                             self.validator.check_remark_line(current_header_line, header_line_number_for_report, errors)
-
+                    
                     if header_check_ok:
                         current_line_idx += 1
                         while current_line_idx < total_lines and (not lines[current_line_idx].startswith('Date:')):
                             time_line_number_for_report = current_line_idx + 1
                             time_line = lines[current_line_idx]
-                            if time_line: # Process non-empty lines
+                            if time_line:
                                 self.validator.check_time_line(time_line, time_line_number_for_report, errors)
                             current_line_idx += 1
-                        continue # Loop back to check for next 'Date:' or end of file
-                    else: # header_check_ok is False, meaning a header was missing or malformed
-                        # We need to advance current_line_idx to try and find the next Date block or end of file.
-                        # The error for missing/malformed header is already added.
-                        # If we broke from header loop due to EOF, current_line_idx is already at total_lines.
-                        # If we didn't break, current_line_idx points to the last checked header or the line after.
-                        # We want to scan from *after* the problematic Date block's start.
-                        # The outer while loop will increment current_line_idx if it's not a 'Date:' line.
-                        # Or, we can explicitly skip to find next 'Date:'
+                        continue
+                    else: 
                         while current_line_idx < total_lines and not lines[current_line_idx].startswith('Date:'):
-                             current_line_idx +=1
-                        continue # To process the found 'Date:' line or exit if EOF
-
-                else: # is_date_line_structurally_valid is False (e.g. Date: format wrong)
-                    # Error already added by check_date_line.
-                    # Skip to find the next potential 'Date:' block or EOF.
+                            current_line_idx +=1
+                        continue
+                else: 
                     current_line_idx += 1
                     while current_line_idx < total_lines and not lines[current_line_idx].startswith('Date:'):
                         current_line_idx += 1
-                    continue # To process the found 'Date:' line or exit if EOF
-            else: # Line does not start with 'Date:'
-                if not processed_any_valid_date_header and line: # First non-empty line is not Date
+                    continue
+            else: 
+                if not processed_any_valid_date_header and line:
                     errors.append(f"第{line_number_for_report}行错误: 文件应以 'Date:YYYYMMDD' 格式的行开始。当前行为: '{line[:50]}...'")
-                    processed_any_valid_date_header = True # Mark that we've processed (and errored on) the start
-                    # We should then skip all lines until a 'Date:' or EOF
+                    processed_any_valid_date_header = True
                     current_line_idx += 1
                     while current_line_idx < total_lines and not lines[current_line_idx].startswith('Date:'):
                         current_line_idx += 1
                     continue
-                elif line : # Non-empty line that is not 'Date:' and not the first line problem
+                elif line : 
                     errors.append(f"第{line_number_for_report}行错误: 意外的内容，此处应为新的 'Date:' 块。内容: '{line[:50]}...'")
-                    current_line_idx += 1 # Move to the next line
-                    # And try to find the next 'Date:'
+                    current_line_idx += 1
                     while current_line_idx < total_lines and not lines[current_line_idx].startswith('Date:'):
                         current_line_idx += 1
                     continue
-                else: # Empty line outside a date block, already handled by the initial `if not line:`
+                else: 
                     current_line_idx += 1
 
-        # After loop, if no 'Date:' line was ever found and file was not empty
         if not processed_any_valid_date_header and any(lines):
-            # This case should be covered by the first line check, but as a fallback:
             if not any(err for err in errors if "文件应以 'Date:YYYYMMDD' 格式的行开始" in err):
                  errors.append(f"错误: 文件不包含任何以 'Date:YYYYMMDD' 开头的有效数据块。")
-
         return errors
 
 def handle_file_processing_and_reporting(file_processor: FileProcessor):
     """
-    Handles user input for file path, calls validation using the file_processor,
-    reports results, and times the process.
+    Handles user input for file or directory path, validates content, reports results, and times processes.
+    Returns False to signal program exit, True to continue.
     """
-    process_start_time = None
     try:
-        file_path = input("请输入文本文件的路径 (或输入 'q' 退出): ")
-        if file_path.lower() in ['q']:
+        user_input_str = input("请输入文本文件路径或目录路径 (或输入 'q' 退出): ")
+        if user_input_str.lower() == 'q':
             return False # Signal to the main loop to exit
 
-        if not file_path:
-            print("未输入文件路径。请重新输入。")
+        if not user_input_str:
+            print("未输入路径。请重新输入。")
             return True # Continue the loop
 
-        process_start_time = time.perf_counter()
+        files_to_process = []
+        is_directory_scan = False
 
-        validation_errors = file_processor.process_and_validate_file_contents(file_path)
+        if not os.path.exists(user_input_str):
+            print(f"错误: 路径 '{user_input_str}' 不存在。")
+            return True
 
-        if validation_errors is None:
-            # File reading error occurred; message already printed by process_and_validate_file_contents.
-            pass
-        elif validation_errors: # Errors were found during validation
-            print("\n发现以下错误:")
-            # Sort errors by line number for readability
-            unique_errors = sorted(list(set(validation_errors)), key=lambda x: int(re.search(r'第(\d+)行', x).group(1)) if re.search(r'第(\d+)行', x) else 0)
-            for error in unique_errors:
-                print(f"{error}") # Removed extra newline, let error messages control their formatting
-        else: # No errors found (validation_errors is an empty list)
-            print("\n文件格式完全正确！")
+        if os.path.isdir(user_input_str):
+            is_directory_scan = True
+            print(f"\n正在扫描目录: {user_input_str}")
+            for entry in os.scandir(user_input_str):
+                if entry.is_file() and entry.name.lower().endswith(".txt"):
+                    files_to_process.append(entry.path)
+            if not files_to_process:
+                print(f"目录 '{user_input_str}' 中未找到 .txt 文件。")
+                return True
+        elif os.path.isfile(user_input_str):
+            if user_input_str.lower().endswith(".txt"):
+                files_to_process.append(user_input_str)
+            else:
+                print(f"错误: 文件 '{user_input_str}' 不是一个 .txt 文件。")
+                return True
+        else:
+            print(f"错误: 路径 '{user_input_str}' 不是一个有效的文件或目录。")
+            return True
+        
+        batch_overall_start_time = time.perf_counter()
+        total_files_in_batch = len(files_to_process)
+        files_processed_count = 0
+        files_with_errors_count = 0
 
-    except EOFError: # Handle Ctrl+D for input
+        for i, current_file_path in enumerate(files_to_process):
+            progress_indicator = f"[{i+1}/{total_files_in_batch}]"
+            print(f"\n{Colors.GREEN}{progress_indicator}{Colors.RESET} 开始处理文件: {current_file_path}")
+
+            file_process_start_time = time.perf_counter()
+            
+            validation_errors = file_processor.process_and_validate_file_contents(current_file_path)
+            files_processed_count += 1
+
+            if validation_errors is None: # File reading error
+                files_with_errors_count += 1
+                # Message already printed by process_and_validate_file_contents
+            elif validation_errors:
+                files_with_errors_count += 1
+                print(f"文件 '{current_file_path}' 发现以下错误:")
+                unique_errors = sorted(list(set(validation_errors)), key=lambda x: int(re.search(r'第(\d+)行', x).group(1)) if re.search(r'第(\d+)行', x) else 0)
+                for error in unique_errors:
+                    print(f"  {error}")
+            else:
+                print(f"文件 '{current_file_path}' 格式完全正确！")
+
+            file_process_end_time = time.perf_counter()
+            print(f"处理文件 '{current_file_path}' 时间: {file_process_end_time - file_process_start_time:.6f} 秒")
+            if i < total_files_in_batch - 1: # Separator for multiple files
+                 print("---") 
+
+        if is_directory_scan and files_processed_count > 0:
+            batch_overall_end_time = time.perf_counter()
+            print("\n--- 目录扫描总结 ---")
+            print(f"总共扫描到并尝试处理 {files_processed_count} 个 .txt 文件 (在目录 '{user_input_str}' 中)。")
+            if files_with_errors_count > 0:
+                print(f"其中 {files_with_errors_count} 个文件存在格式错误或读取问题。")
+            else:
+                print("所有扫描到的文件均格式正确。")
+            print(f"目录扫描和处理总耗时: {batch_overall_end_time - batch_overall_start_time:.6f} 秒")
+        elif not is_directory_scan and files_processed_count == 1 : # Single file processed, time already reported
+             pass
+
+
+    except EOFError:
         print("\n检测到EOF，程序即将退出。")
         return False
-    except KeyboardInterrupt: # Handle Ctrl+C
+    except KeyboardInterrupt:
         print("\n用户中断，程序即将退出。")
         return False
-    except Exception as e: # Catches errors from input() or other unexpected issues
+    except Exception as e:
         print(f"\n程序执行过程中发生致命错误: {e}")
         import traceback
         traceback.print_exc()
-    finally:
-        process_end_time = time.perf_counter()
-        if process_start_time is not None: # Check if timing actually started
-            print(f"\n处理时间:{process_end_time - process_start_time:.6f}秒")
-        # else: # No timing if file_path was empty or exit command
-            # print(f"\n处理时间: 无法计算 (计时可能未开始或过早出错)")
-    return True # Signal to continue the loop
+    
+    return True
 
 def main():
     """
     Main function to run the script.
-    Initializes necessary components and starts the file processing workflow in a loop.
     """
     config_manager = ConfigManager(CONFIG_FILE_PATH)
     if not config_manager.load():
-        # Config loading failed. Messages are printed by ConfigManager.
-        # The application will proceed with default (empty) configurations
-        # as ConfigManager attributes are initialized to empty.
         print("警告: 配置加载失败或文件未找到。程序将继续，但某些校验规则可能无法应用。")
 
     line_validator = LineValidator(config_manager)
