@@ -1,5 +1,7 @@
 import sys
 import datetime # Kept for potential future dynamic year
+import json     # 新增：导入json模块
+import os       # 新增：导入os模块，用于检查文件是否存在
 
 class LogProcessor:
     """
@@ -12,45 +14,37 @@ class LogProcessor:
     YELLOW = "\033[93m"  # Added for Getup:null
     RESET = "\033[0m"
 
-    TEXT_REPLACEMENT_MAP = {
-        "word":"study_english_word", # 第一个 "word" 条目是多余的，已移除
-        "单词":"study_english_word",
-        "code":"code_time-master",
-        "rest0":"rest_short",
-        "rest1":"rest_medium",
-        "rest2":"rest_long",
-        "洗澡" : "routine_bath",
-        "快递" : "routine_express",
-        "洗漱" : "routine_grooming",
-        "拉屎" : "routine_toilet",
-        "meal0": "meal_short",
-        "meal1": "meal_medium",
-        "meal2": "meal_long",
-        "zh": "recreation_zhihu",
-        "知乎": "recreation_zhihu",
-        "dy": "recreation_douyin",
-        "抖音": "recreation_douyin",
-        "守望先锋":"recreation_game_overwatch",
-        "ow":"recreation_game_overwatch",
-        "bili" : "recreation_bilibili",
-        "mix":"recreation_mix",
-        "b":"recreation_bilibili",
-        "电影" : "recreation_movie",
-        "撸" : "rest_masturbation",
-        "school" : "other_school",
-        "有氧" : "exercise_cardio",
-        "无氧" : "exercise_anaerobic",
-        "运动" : "exercise_both",
-    }
+    # 移除了硬编码的 TEXT_REPLACEMENT_MAP
+    # 它将在 __init__ 中作为实例变量加载
 
-    def __init__(self, year: int = 2025):
+    def __init__(self, year: int = 2025, replacement_map_file: str = "end2duration.json"):
         self.year_to_use = year
         # 用于处理单个日期块内事件的状态变量
         self._last_interval_start_raw_time = None
         self._was_previous_event_initial_raw_xing = False
         # 用于管理 process_log_data 中日期块之间换行的状态变量
         self._printed_at_least_one_block = False
+        # 加载文本替换映射
+        self.TEXT_REPLACEMENT_MAP = self._load_replacement_map(replacement_map_file)
 
+    def _load_replacement_map(self, file_path: str) -> dict:
+        """从指定的JSON文件加载文本替换映射。"""
+        if not os.path.exists(file_path):
+            print(f"警告: 文本替换映射文件 '{file_path}' 未找到。将使用空的替换映射。", file=sys.stderr)
+            return {}
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if not isinstance(data, dict):
+                    print(f"警告: 文本替换映射文件 '{file_path}' 的内容不是一个有效的JSON对象 (字典)。将使用空的替换映射。", file=sys.stderr)
+                    return {}
+                return data
+        except json.JSONDecodeError:
+            print(f"警告: 解析文本替换映射文件 '{file_path}' 失败。请确保它是有效的JSON格式。将使用空的替换映射。", file=sys.stderr)
+            return {}
+        except Exception as e:
+            print(f"读取文本替换映射文件 '{file_path}' 时发生未知错误: {e}。将使用空的替换映射。", file=sys.stderr)
+            return {}
 
     @staticmethod
     def _format_time(time_str: str) -> str:
@@ -65,32 +59,24 @@ class LogProcessor:
 
     def _process_and_print_date_block(self, date_line_content: str, event_lines_content: list):
         # 1. 格式化日期字符串
-        # 假设 date_line_content 已经是2位或3位数字
-        # 月份是第一个字符，日期是剩余的字符
         month_char = date_line_content[0]
         day_chars = date_line_content[1:]
-
-        # 格式化月份和日期，确保各占两位，不足补零
         formatted_month_str = f"{int(month_char):02d}"
-        formatted_day_str = f"{int(day_chars):02d}" # 例如 '1' -> "01", '23' -> "23"
-
+        formatted_day_str = f"{int(day_chars):02d}"
         formatted_date_output_str = f"Date:{self.year_to_use}{formatted_month_str}{formatted_day_str}"
         
         # 2. 初始化事件处理所需变量
         day_has_study_event = False
-        # 此列表将存储 Getup/Remark 以及所有后续格式化的事件行
         event_related_output_lines = [] 
         
-        self._reset_date_block_processing_state() # 为此特定块的事件重置状态
+        self._reset_date_block_processing_state()
 
         # 3. 根据实际的第一个事件决定并添加 Getup/Remark 行
         is_first_event_actual_getup_type = False
         first_event_true_formatted_time = None
 
-        if event_lines_content:  # 检查当天是否有任何事件
-            # 预查看第一个事件以决定 Getup 行的格式
+        if event_lines_content:
             first_event_line_peek_str = event_lines_content[0]
-            # 对预查看的行进行基本验证 (假设格式为 "HHMM文本")
             if len(first_event_line_peek_str) >= 4 and first_event_line_peek_str[:4].isdigit():
                 first_event_peek_raw_time = first_event_line_peek_str[:4]
                 first_event_peek_original_text = first_event_line_peek_str[4:]
@@ -108,50 +94,43 @@ class LogProcessor:
         # 4. 处理所有事件行以记录活动并检查 "study"
         start_processing_from_index = 0
         if is_first_event_actual_getup_type:
-            # 第一个事件已被 "Getup:HH:MM" 行“消耗”
-            #将其时间设置为下一个区间的开始，并检查其是否包含 "study"
             consumed_event_raw_time = event_lines_content[0][:4]
             consumed_event_original_text = event_lines_content[0][4:]
 
             self._last_interval_start_raw_time = consumed_event_raw_time
             if consumed_event_original_text == "醒":
                 self._was_previous_event_initial_raw_xing = True
-            else:  # "起床"
+            else:
                 self._was_previous_event_initial_raw_xing = False
             
-            # 检查这个被“消耗”的起床事件的 display_text 是否包含 "study"
+            # 使用 self.TEXT_REPLACEMENT_MAP
             consumed_display_text = self.TEXT_REPLACEMENT_MAP.get(consumed_event_original_text, consumed_event_original_text)
             if "study" in consumed_display_text:
                 day_has_study_event = True
             
-            start_processing_from_index = 1 # 实际活动从下一个事件开始处理
+            start_processing_from_index = 1
 
-        # 循环处理代表实际活动的事件行
         for i in range(start_processing_from_index, len(event_lines_content)):
             event_line_str = event_lines_content[i]
             
             raw_time = event_line_str[:4]
             original_text = event_line_str[4:]
             current_formatted_time = self._format_time(raw_time)
+            # 使用 self.TEXT_REPLACEMENT_MAP
             display_text = self.TEXT_REPLACEMENT_MAP.get(original_text, original_text)
 
             if "study" in display_text:
                 day_has_study_event = True
             
-            # 格式化事件行本身
-            if self._last_interval_start_raw_time is None: # 这是记录的第一个实际活动
+            if self._last_interval_start_raw_time is None:
                 event_related_output_lines.append(f"{current_formatted_time}{display_text}")
                 self._last_interval_start_raw_time = raw_time
-                # 对于非“醒”的第一个实际活动，默认为 False
                 self._was_previous_event_initial_raw_xing = False 
-            else: # 这是后续的记录活动
-                if self._was_previous_event_initial_raw_xing: # 如果前一个实际活动是 "醒"
-                    event_related_output_lines.append(f"{current_formatted_time}{display_text}")
-                    self._was_previous_event_initial_raw_xing = False # 使用后重置
-                else: # 从前一个实际活动开始的正常区间
-                    start_formatted_time = self._format_time(self._last_interval_start_raw_time)
-                    event_related_output_lines.append(f"{start_formatted_time}~{current_formatted_time}{display_text}")
-                self._last_interval_start_raw_time = raw_time # 更新最后一个活动的原始时间
+            else: 
+                start_formatted_time = self._format_time(self._last_interval_start_raw_time)
+                event_related_output_lines.append(f"{start_formatted_time}~{current_formatted_time}{display_text}")
+                self._was_previous_event_initial_raw_xing = False 
+                self._last_interval_start_raw_time = raw_time
         
         # 5. 打印日期，然后是状态，最后是所有与事件相关的行
         print(formatted_date_output_str)
@@ -168,31 +147,26 @@ class LogProcessor:
         
         current_date_raw_content = None
         current_event_lines_for_block = []
-        self._printed_at_least_one_block = False # 为此次运行重置
+        self._printed_at_least_one_block = False 
 
         for line_content in lines:
             line = line_content.strip()
             if not line:
                 continue
 
-            # ***** 修改点在这里 *****
-            if line.isdigit() and (len(line) == 2 or len(line) == 3):  # 新的日期行 (接受2位或3位) [cite: 1]
-                if current_date_raw_content is not None: # 处理先前收集的块
-                    if self._printed_at_least_one_block: # 如果不是第一个要打印的块，则添加换行符
+            if line.isdigit() and (len(line) == 2 or len(line) == 3):
+                if current_date_raw_content is not None: 
+                    if self._printed_at_least_one_block: 
                         print() 
                     self._process_and_print_date_block(current_date_raw_content, current_event_lines_for_block)
                     self._printed_at_least_one_block = True
                 
-                # 开始新块
                 current_date_raw_content = line
                 current_event_lines_for_block = []
-            else:  # 事件行
-                # 对事件行结构的基本验证
+            else:  
                 if len(line) >= 4 and line[:4].isdigit():
                      current_event_lines_for_block.append(line)
-                # 格式错误的事件行或其他文本将被忽略，除非添加进一步处理
 
-        # 循环结束后处理最后一个收集的块
         if current_date_raw_content is not None:
             if self._printed_at_least_one_block:
                  print()
@@ -204,7 +178,9 @@ if __name__ == '__main__':
         with open(file_path, 'r', encoding='utf-8') as file:
             input_data = file.read()
         
-        processor = LogProcessor() 
+        # 您可以在这里传递不同的替换映射文件名，如果需要的话：
+        # processor = LogProcessor(replacement_map_file="custom_map.json")
+        processor = LogProcessor() # 将使用默认的 "text_replacement_map.json"
         processor.process_log_data(input_data)
 
     except FileNotFoundError:
