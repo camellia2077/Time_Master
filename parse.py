@@ -4,12 +4,7 @@ import os
 from datetime import datetime, timedelta
 from collections import defaultdict
 import calendar
-# Assuming parse_colors_config.py exists in the same directory or is in PYTHONPATH
-# from parse_colors_config import DEFAULT_COLOR_PALETTE, YELLOW
-
-# Placeholder for color constants if parse_colors_config is not available
-DEFAULT_COLOR_PALETTE = ['#ebedf0', '#c6e48b', '#7bc96f', '#239a3b', '#196127']
-YELLOW = '#fdd835'
+from parse_colors_config import DEFAULT_COLOR_PALETTE, YELLOW
 
 def return_color(study_time):
     hours = study_time / 3600
