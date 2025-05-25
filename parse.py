@@ -4,8 +4,8 @@ import os
 from datetime import datetime, timedelta
 from collections import defaultdict
 import calendar
-from colors_config import DEFAULT_COLOR_PALETTE
-from colors_config import YELLOW
+from parse_colors_config import DEFAULT_COLOR_PALETTE
+from parse_colors_config import YELLOW
 
 def return_color(study_time):
     hours = study_time / 3600
