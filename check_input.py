@@ -138,106 +138,191 @@ class LineValidator:
             errors.append(f"第{line_num}行错误:当小时相同时，结束时间分钟数({end_m:02d})不应小于开始时间分钟数({start_m:02d})")
 
 class FileProcessor:
-    def __init__(self, line_validator: LineValidator):
+    def __init__(self, line_validator: 'LineValidator'): # Forward reference LineValidator if defined later
         self.validator = line_validator
 
     def process_and_validate_file_contents(self, file_path):
-        """
-        Reads and validates the content of the given file according to predefined rules.
-        """
         errors = []
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 lines = [line.strip() for line in f.readlines()]
         except FileNotFoundError:
-            # 此处打印错误信息，让调用者知道具体哪个文件未找到
-            # print(f"错误: 文件 '{file_path}' 未找到。") # 已在 handle_file_processing_and_reporting 中处理
-            return None # 返回 None 表示读取失败
+            return None # Indicates file reading error
         except Exception as e:
-            # 此处打印错误信息
-            # print(f"读取文件 '{file_path}' 时发生错误: {e}") # 已在 handle_file_processing_and_reporting 中处理
-            return None # 返回 None 表示读取失败
+            # print(f"读取文件 '{file_path}' 时发生错误: {e}") # Debugging, handled by caller
+            return None # Indicates file reading error
 
-        current_line_idx = 0
+        current_outer_line_idx = 0 # Index for the main loop iterating through Date blocks
         total_lines = len(lines)
         processed_any_valid_date_header = False
 
-        while current_line_idx < total_lines:
-            line_number_for_report = current_line_idx + 1
-            line = lines[current_line_idx]
+        while current_outer_line_idx < total_lines:
+            line_number_for_report = current_outer_line_idx + 1
+            line_content_current_outer = lines[current_outer_line_idx]
 
-            if not line:
-                current_line_idx += 1
+            if not line_content_current_outer: # Skip empty lines between Date blocks
+                current_outer_line_idx += 1
                 continue
 
-            if line.startswith('Date:'):
+            if line_content_current_outer.startswith('Date:'):
                 processed_any_valid_date_header = True
-                is_date_line_structurally_valid = self.validator.check_date_line(line, line_number_for_report, errors)
+                date_block_start_actual_line_num = line_number_for_report
+                
+                is_date_line_valid = self.validator.check_date_line(line_content_current_outer, date_block_start_actual_line_num, errors)
+                if not is_date_line_valid:
+                    # Date line is bad, try to find next Date or EOF
+                    idx_after_bad_date = current_outer_line_idx + 1
+                    while idx_after_bad_date < total_lines and \
+                          (not lines[idx_after_bad_date].startswith('Date:') if lines[idx_after_bad_date] else True): # Skip empty lines too
+                        idx_after_bad_date += 1
+                    current_outer_line_idx = idx_after_bad_date
+                    continue # To the next iteration of the main while loop
 
-                if is_date_line_structurally_valid:
-                    expected_headers = ['Status', 'Getup', 'Remark']
-                    header_check_ok = True
-                    date_block_start_line_number = line_number_for_report
+                # Date line is structurally valid, proceed with this block
+                status_line_content_for_day = None
+                status_line_number_for_day = -1
+                day_contains_study_activity = False
+                
+                # --- Header Processing ---
+                # Expected headers relative to the Date line
+                # Date line is at current_outer_line_idx
+                # Status should be at current_outer_line_idx + 1
+                # Getup should be at current_outer_line_idx + 2
+                # Remark should be at current_outer_line_idx + 3
+                
+                headers_structurally_present = True # Assume headers are present initially
 
-                    for i_header, header_name in enumerate(expected_headers): # Renamed i to i_header to avoid conflict
-                        current_line_idx += 1
-                        header_line_number_for_report = current_line_idx + 1
+                # Status Header
+                status_idx_in_lines = current_outer_line_idx + 1
+                if status_idx_in_lines >= total_lines:
+                    errors.append(f"文件在第{date_block_start_actual_line_num}行的Date块后意外结束，缺少 Status 行。")
+                    headers_structurally_present = False
+                else:
+                    status_line_content_for_day = lines[status_idx_in_lines]
+                    status_line_number_for_day = status_idx_in_lines + 1
+                    if not status_line_content_for_day.startswith("Status:"):
+                        errors.append(f"第{status_line_number_for_day}行错误:应为 'Status:' 开头，实际为 '{status_line_content_for_day[:30]}...'")
+                        # Note: check_status_line will also report if format is wrong (e.g. Status:true instead of Status:True)
+                    self.validator.check_status_line(status_line_content_for_day, status_line_number_for_day, errors)
 
-                        if current_line_idx >= total_lines:
-                            errors.append(f"文件在第{date_block_start_line_number}行的Date块后意外结束，缺少 {header_name} 行。")
-                            header_check_ok = False
-                            break
+                # Getup Header (only check if previous was considered present for structure)
+                getup_idx_in_lines = current_outer_line_idx + 2
+                if headers_structurally_present: # Check this flag before proceeding to next header
+                    if getup_idx_in_lines >= total_lines:
+                        errors.append(f"文件在第{date_block_start_actual_line_num}行的Date块后意外结束，缺少 Getup 行。")
+                        headers_structurally_present = False
+                    else:
+                        getup_line_content = lines[getup_idx_in_lines]
+                        getup_line_number = getup_idx_in_lines + 1
+                        if not getup_line_content.startswith("Getup:"):
+                            errors.append(f"第{getup_line_number}行错误:应为 'Getup:' 开头，实际为 '{getup_line_content[:30]}...'")
+                        self.validator.check_getup_line(getup_line_content, getup_line_number, errors)
+                
+                # Remark Header
+                remark_idx_in_lines = current_outer_line_idx + 3
+                if headers_structurally_present:
+                    if remark_idx_in_lines >= total_lines:
+                        errors.append(f"文件在第{date_block_start_actual_line_num}行的Date块后意外结束，缺少 Remark 行。")
+                        headers_structurally_present = False
+                    else:
+                        remark_line_content = lines[remark_idx_in_lines]
+                        remark_line_number = remark_idx_in_lines + 1
+                        if not remark_line_content.startswith("Remark:"):
+                            errors.append(f"第{remark_line_number}行错误:应为 'Remark:' 开头，实际为 '{remark_line_content[:30]}...'")
+                        self.validator.check_remark_line(remark_line_content, remark_line_number, errors)
 
-                        current_header_line = lines[current_line_idx]
-                        if not current_header_line.startswith(f"{header_name}:"):
-                            errors.append(f"第{header_line_number_for_report}行错误:应为 '{header_name}:' 开头，实际为 '{current_header_line[:30]}...'")
-                            header_check_ok = False
-                        
-                        if header_name == 'Status':
-                            self.validator.check_status_line(current_header_line, header_line_number_for_report, errors)
-                        elif header_name == 'Getup':
-                            self.validator.check_getup_line(current_header_line, header_line_number_for_report, errors)
-                        elif header_name == 'Remark':
-                            self.validator.check_remark_line(current_header_line, header_line_number_for_report, errors)
+                # If headers were not structurally present (e.g., file ended prematurely), skip to next Date block
+                if not headers_structurally_present:
+                    idx_scanner = current_outer_line_idx + 1
+                    while idx_scanner < total_lines and \
+                          (not lines[idx_scanner].startswith('Date:') if lines[idx_scanner] else True):
+                        idx_scanner += 1
+                    current_outer_line_idx = idx_scanner
+                    continue
+
+                # --- Activity Line Processing (if headers were structurally present) ---
+                first_activity_line_idx_in_lines = current_outer_line_idx + 4 # Line after Date, Status, Getup, Remark
+                
+                current_activity_processing_idx = first_activity_line_idx_in_lines
+                activity_lines_data_for_validation = [] # Store {'content': ..., 'num': ...}
+
+                while current_activity_processing_idx < total_lines and \
+                      (not lines[current_activity_processing_idx].startswith('Date:')):
                     
-                    if header_check_ok:
-                        current_line_idx += 1
-                        while current_line_idx < total_lines and (not lines[current_line_idx].startswith('Date:')):
-                            time_line_number_for_report = current_line_idx + 1
-                            time_line = lines[current_line_idx]
-                            if time_line:
-                                self.validator.check_time_line(time_line, time_line_number_for_report, errors)
-                            current_line_idx += 1
-                        continue
-                    else: 
-                        while current_line_idx < total_lines and not lines[current_line_idx].startswith('Date:'):
-                            current_line_idx +=1
-                        continue
-                else: 
-                    current_line_idx += 1
-                    while current_line_idx < total_lines and not lines[current_line_idx].startswith('Date:'):
-                        current_line_idx += 1
-                    continue
-            else: 
-                if not processed_any_valid_date_header and line:
-                    errors.append(f"第{line_number_for_report}行错误: 文件应以 'Date:YYYYMMDD' 格式的行开始。当前行为: '{line[:50]}...'")
-                    processed_any_valid_date_header = True
-                    current_line_idx += 1
-                    while current_line_idx < total_lines and not lines[current_line_idx].startswith('Date:'):
-                        current_line_idx += 1
-                    continue
-                elif line : 
-                    errors.append(f"第{line_number_for_report}行错误: 意外的内容，此处应为新的 'Date:' 块。内容: '{line[:50]}...'")
-                    current_line_idx += 1
-                    while current_line_idx < total_lines and not lines[current_line_idx].startswith('Date:'):
-                        current_line_idx += 1
-                    continue
-                else: 
-                    current_line_idx += 1
+                    activity_content = lines[current_activity_processing_idx]
+                    activity_num = current_activity_processing_idx + 1
 
-        if not processed_any_valid_date_header and any(lines):
-            if not any(err for err in errors if "文件应以 'Date:YYYYMMDD' 格式的行开始" in err):
+                    if activity_content: # Only process non-empty lines as activity lines
+                        activity_lines_data_for_validation.append({'content': activity_content, 'num': activity_num})
+                        
+                        # For "study" check, extract text part from activity line
+                        # Format is HH:MM~HH:MMtext
+                        match = re.match(r'^\d{2}:\d{2}~\d{2}:\d{2}(.*)$', activity_content)
+                        if match:
+                            activity_text_part = match.group(1)
+                            if "study" in activity_text_part: # Case-sensitive "study"
+                                day_contains_study_activity = True
+                    
+                    current_activity_processing_idx += 1
+                
+                # Apply the new "study"-based Status rule
+                if status_line_content_for_day is not None and status_line_number_for_day != -1:
+                    # Check if Status line has a valid True/False format first
+                    actual_status_match = re.fullmatch(r'Status:(True|False)', status_line_content_for_day)
+                    if actual_status_match:
+                        actual_status_bool = actual_status_match.group(1) == "True"
+                        expected_status_bool = day_contains_study_activity
+
+                        if actual_status_bool != expected_status_bool:
+                            reason_verb = "包含" if day_contains_study_activity else "不包含"
+                            errors.append(
+                                f"第{status_line_number_for_day}行错误: Status应为 Status:{str(expected_status_bool)} (因活动{reason_verb} 'study')，但找到 Status:{actual_status_match.group(1)}。"
+                            )
+                    # If actual_status_match is None, it means the Status line is malformed (e.g., "Status:Maybe").
+                    # This structural error is already caught by self.validator.check_status_line.
+                    # The new rule applies only if the Status itself is parseable as True or False.
+                
+                # Perform original validation on collected activity lines
+                for act_line_info in activity_lines_data_for_validation:
+                    self.validator.check_time_line(act_line_info['content'], act_line_info['num'], errors)
+
+                # Advance outer_line_idx to the start of the next block (which is current_activity_processing_idx)
+                current_outer_line_idx = current_activity_processing_idx
+                continue # To the next iteration of the main while loop for Date blocks
+                
+            else: # Line does not start with 'Date:' (and is not an empty line skipped at the beginning of the loop)
+                if not processed_any_valid_date_header and line_content_current_outer: # Must be non-empty to trigger this
+                    errors.append(f"第{line_number_for_report}行错误: 文件应以 'Date:YYYYMMDD' 格式的行开始。当前行为: '{line_content_current_outer[:50]}...'")
+                    processed_any_valid_date_header = True # Avoid repeating this for every leading non-Date line
+                    
+                    # Consume lines until the next 'Date:' or EOF
+                    idx_scanner = current_outer_line_idx + 1
+                    while idx_scanner < total_lines and \
+                          (not lines[idx_scanner].startswith('Date:') if lines[idx_scanner] else True):
+                        idx_scanner += 1
+                    current_outer_line_idx = idx_scanner
+                    continue
+
+                elif line_content_current_outer: # An unexpected non-empty line when a 'Date:' block was expected
+                    errors.append(f"第{line_number_for_report}行错误: 意外的内容，此处应为新的 'Date:' 块。内容: '{line_content_current_outer[:50]}...'")
+                    idx_scanner = current_outer_line_idx + 1
+                    while idx_scanner < total_lines and \
+                          (not lines[idx_scanner].startswith('Date:') if lines[idx_scanner] else True):
+                        idx_scanner += 1
+                    current_outer_line_idx = idx_scanner
+                    continue
+                else: 
+                    # This case should ideally not be reached if initial `if not line_content_current_outer:` handles it.
+                    # As a safeguard, advance index if it's an empty line that somehow got here.
+                    current_outer_line_idx += 1
+
+
+        # Final check if no Date blocks were found at all but the file had content
+        if not processed_any_valid_date_header and any(l.strip() for l in lines):
+            is_first_line_error_present = any("文件应以 'Date:YYYYMMDD' 格式的行开始" in err for err in errors)
+            if not is_first_line_error_present:
                  errors.append(f"错误: 文件不包含任何以 'Date:YYYYMMDD' 开头的有效数据块。")
+        
         return errors
 
 def handle_file_processing_and_reporting(file_processor: FileProcessor):
