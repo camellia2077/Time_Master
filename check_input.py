@@ -263,15 +263,18 @@ def handle_file_processing_and_reporting(file_processor: FileProcessor):
 
         if os.path.isdir(user_input_str):
             is_directory_scan = True
-            # print(f"\n正在扫描目录: {user_input_str}") # 移动到文件处理循环前打印，避免重复
-            for entry in os.scandir(user_input_str):
-                if entry.is_file() and entry.name.lower().endswith(".txt"):
-                    files_to_process.append(entry.path)
+            print(f"\n{Colors.GREEN}正在递归扫描目录 '{user_input_str}' 及其所有子目录...{Colors.RESET}") # 更新提示信息
+            for dirpath, dirnames, filenames in os.walk(user_input_str):
+                for filename in filenames:
+                    if filename.lower().endswith(".txt"):
+                        full_path = os.path.join(dirpath, filename)
+                        files_to_process.append(full_path)
+            
             if not files_to_process:
-                print(f"目录 '{user_input_str}' 中未找到 .txt 文件。")
+                print(f"在目录 '{user_input_str}' 及其子目录中未找到 .txt 文件。")
                 return True
             else:
-                print(f"\n在目录 '{user_input_str}' 中找到 {len(files_to_process)} 个 .txt 文件准备处理。")
+                print(f"\n在目录 '{user_input_str}' 及其子目录中找到 {len(files_to_process)} 个 .txt 文件准备处理。")
 
         elif os.path.isfile(user_input_str):
             if user_input_str.lower().endswith(".txt"):
@@ -286,43 +289,38 @@ def handle_file_processing_and_reporting(file_processor: FileProcessor):
         batch_overall_start_time = time.perf_counter()
         total_files_in_batch = len(files_to_process)
         files_processed_count = 0
-        files_with_errors_count_in_batch = 0 # 更明确的变量名
+        files_with_errors_count_in_batch = 0 
 
         for i, current_file_path in enumerate(files_to_process):
             file_process_start_time = time.perf_counter()
             
-            # 1. 处理文件以获取 validation_errors
             validation_errors = file_processor.process_and_validate_file_contents(current_file_path)
             files_processed_count += 1
 
-            # 2. 判断该文件是否有错误，并据此更新错误计数和颜色
             current_file_has_errors = False
-            if validation_errors is None: # 文件读取失败
-                # FileProcessor.process_and_validate_file_contents 中已打印具体错误
-                # 这里可以不重复打印，或者打印一个更通用的消息
-                # print(f"错误: 文件 '{current_file_path}' 读取失败。")
+            if validation_errors is None: 
                 files_with_errors_count_in_batch += 1
                 current_file_has_errors = True
-            elif validation_errors: # 存在验证错误
+            elif validation_errors: 
                 files_with_errors_count_in_batch += 1
                 current_file_has_errors = True
             
-            # 3. 选择颜色并打印进度指示器
             indicator_color = Colors.RED if current_file_has_errors else Colors.GREEN
             progress_indicator = f"[{i+1}/{total_files_in_batch}]"
+            # 打印文件路径时，考虑相对路径或仅文件名，如果完整路径太长
+            # simplified_path = os.path.relpath(current_file_path, user_input_str) if is_directory_scan and current_file_path.startswith(os.path.abspath(user_input_str)) else current_file_path
+            # print(f"\n{indicator_color}{progress_indicator}{Colors.RESET} 开始处理文件: {simplified_path}")
             print(f"\n{indicator_color}{progress_indicator}{Colors.RESET} 开始处理文件: {current_file_path}")
 
-            # 4. 打印详细结果
+
             if validation_errors is None:
-                 # 如果 process_and_validate_file_contents 内部已经打印了文件读取错误信息，这里可以省略
-                 # 若要确保有输出，可以加一句：
                  print(f"注意: 文件 '{current_file_path}' 读取失败或无法访问。")
             elif validation_errors:
                 print(f"文件 '{current_file_path}' 发现以下错误:")
                 unique_errors = sorted(list(set(validation_errors)), key=lambda x: int(re.search(r'第(\d+)行', x).group(1)) if re.search(r'第(\d+)行', x) else 0)
                 for error in unique_errors:
                     print(f"  {error}")
-            else: # 没有错误
+            else: 
                 print(f"文件 '{current_file_path}' 格式完全正确！")
 
             file_process_end_time = time.perf_counter()
@@ -333,17 +331,15 @@ def handle_file_processing_and_reporting(file_processor: FileProcessor):
         if is_directory_scan and files_processed_count > 0:
             batch_overall_end_time = time.perf_counter()
             print("\n--- 目录扫描总结 ---")
-            print(f"总共扫描并尝试处理 {files_processed_count} 个 .txt 文件 (在目录 '{user_input_str}' 中)。")
+            print(f"总共扫描并尝试处理 {files_processed_count} 个 .txt 文件 (在目录 '{user_input_str}' 及其子目录中)。")
             if files_with_errors_count_in_batch > 0:
                 print(f"{Colors.RED}其中 {files_with_errors_count_in_batch} 个文件存在格式错误或读取问题。{Colors.RESET}")
             else:
                 print(f"{Colors.GREEN}所有扫描到的文件均格式正确。{Colors.RESET}")
             print(f"目录扫描和处理总耗时: {batch_overall_end_time - batch_overall_start_time:.6f} 秒")
         elif not is_directory_scan and files_processed_count == 1 :
-             # 对于单个文件，错误状态已通过序号颜色体现，总结信息可以简化或省略
              if files_with_errors_count_in_batch > 0:
                  print(f"{Colors.RED}该文件存在错误。{Colors.RESET}")
-             # else: # 无需额外打印“文件正确”，因为上面已有 "格式完全正确！"
     
     except EOFError:
         print("\n检测到EOF，程序即将退出。")
