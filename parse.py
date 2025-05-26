@@ -4,631 +4,631 @@ import os
 from datetime import datetime, timedelta
 from collections import defaultdict
 import calendar
+from parse_colors_config import DEFAULT_COLOR_PALETTE
+from parse_colors_config import YELLOW
 
-DEFAULT_COLOR_PALETTE = ['#ebedf0', '#c6e48b', '#7bc96f', '#239a3b', '#196127']
-YELLOW = '#fdd835'
-
-class TimeTrackerDB:
-    """Manages database interactions for the time tracking application."""
-
-    def __init__(self, db_path='time_tracking.db'):
-        self.db_path = db_path
-        self.conn = None
-        self._connect()
-        self._init_schema()
-        self._init_predefined_parents()
-
-    def _connect(self):
-        """Establishes a database connection."""
-        self.conn = sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES)
-        self.conn.row_factory = sqlite3.Row
-
-    def _init_schema(self):
-        """Initializes the database schema if tables don't exist."""
-        cursor = self.conn.cursor()
-        cursor.executescript('''
-            CREATE TABLE IF NOT EXISTS days (
-                date TEXT PRIMARY KEY,
-                status TEXT,
-                remark TEXT,
-                getup_time TEXT
-            );
-            CREATE TABLE IF NOT EXISTS time_records (
-                date TEXT,
-                start TEXT,
-                end TEXT,
-                project_path TEXT,
-                duration INTEGER, /* in seconds */
-                FOREIGN KEY(date) REFERENCES days(date) ON DELETE CASCADE,
-                PRIMARY KEY(date, start)
-            );
-            CREATE TABLE IF NOT EXISTS parent_child (
-                child TEXT PRIMARY KEY,
-                parent TEXT
-            );
-        ''')
-        self.conn.commit()
-
-    def _init_predefined_parents(self):
-        """Initializes predefined top-level parent-child mappings."""
-        cursor = self.conn.cursor()
-        top_level_map = {
-            'study': 'STUDY', 'code': 'CODE', 'routine': 'ROUTINE', 'break': 'BREAK',
-            'rest': 'REST', 'exercise': 'EXERCISE', 'sleep': 'SLEEP',
-            'recreation': 'RECREATION', 'other': 'OTHER', 'meal': 'MEAL',
-            'program': 'PROGRAM', 'arrange': 'ARRANGE',
-        }
-        for child, parent_val in top_level_map.items():
-            cursor.execute("INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)", (child, parent_val))
-        self.conn.commit()
-
-    def get_cursor(self):
-        """Returns a database cursor."""
-        if not self.conn:
-            self._connect()
-        return self.conn.cursor()
-
-    def commit(self):
-        """Commits the current transaction."""
-        if self.conn:
-            self.conn.commit()
-
-    def rollback(self):
-        """Rolls back the current transaction."""
-        if self.conn:
-            self.conn.rollback()
-
-    def close(self):
-        """Closes the database connection."""
-        if self.conn:
-            self.conn.close()
-            self.conn = None
-
-    def insert_day_record_if_not_exists(self, date_val):
-        cursor = self.get_cursor()
-        cursor.execute('INSERT OR IGNORE INTO days (date) VALUES (?)', (date_val,))
-
-    def update_day_details(self, date_val, status, remark, getup_time):
-        cursor = self.get_cursor()
-        cursor.execute('UPDATE days SET status=?, remark=?, getup_time=? WHERE date=?',
-                       (status, remark, getup_time, date_val))
-
-    def insert_time_record(self, date_val, start_r, end_r, project_path_r, duration_r):
-        cursor = self.get_cursor()
-        cursor.execute('''
-            INSERT OR REPLACE INTO time_records (date, start, end, project_path, duration)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (date_val, start_r, end_r, project_path_r, duration_r))
-
-    def update_project_hierarchy(self, project_path):
-        """Updates the parent_child table based on the project_path."""
-        cursor = self.get_cursor()
-        parts = project_path.split('_')
-        for i in range(len(parts)):
-            child_proj = '_'.join(parts[:i + 1])
-            if i == 0:
-                cursor.execute("SELECT parent FROM parent_child WHERE child = ?", (parts[0],))
-                predefined_parent_row = cursor.fetchone()
-                parent_proj = predefined_parent_row['parent'] if predefined_parent_row else child_proj.upper()
-                cursor.execute("INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)", (child_proj, parent_proj))
-            else:
-                parent_proj = '_'.join(parts[:i])
-                cursor.execute("INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)", (child_proj, parent_proj))
-
-    def get_top_level_parent_for_project(self, project_part_str):
-        cursor = self.get_cursor()
-        cursor.execute("SELECT parent FROM parent_child WHERE child = ?", (project_part_str,))
-        res = cursor.fetchone()
-        return res['parent'] if res else project_part_str.upper()
-
-    def get_study_times_for_year(self, year):
-        cursor = self.get_cursor()
-        start_date_str = f"{year}0101"
-        end_date_str = f"{year}1231"
-        cursor.execute('''
-            SELECT date, SUM(duration) as total_duration
-            FROM time_records
-            WHERE date BETWEEN ? AND ?
-            AND (project_path = 'study' OR project_path LIKE 'study\_%')
-            GROUP BY date
-        ''', (start_date_str, end_date_str))
-        return {row['date']: row['total_duration'] for row in cursor.fetchall()}
-
-    def get_day_info(self, date_query):
-        cursor = self.get_cursor()
-        cursor.execute('SELECT status, remark, getup_time FROM days WHERE date = ?', (date_query,))
-        return cursor.fetchone()
-
-    def get_day_total_duration(self, date_query):
-        cursor = self.get_cursor()
-        cursor.execute('SELECT SUM(duration) as total_duration FROM time_records WHERE date = ?', (date_query,))
-        row = cursor.fetchone()
-        return row['total_duration'] if row and row['total_duration'] is not None else 0
-
-    def get_day_time_records(self, date_query):
-        cursor = self.get_cursor()
-        cursor.execute('SELECT project_path, duration FROM time_records WHERE date = ?', (date_query,))
-        return cursor.fetchall()
-
-    def get_period_status_summary(self, start_date, end_date):
-        cursor = self.get_cursor()
-        cursor.execute('''
-            SELECT SUM(CASE WHEN status = 'True' THEN 1 ELSE 0 END) as true_count,
-                   SUM(CASE WHEN status = 'False' THEN 1 ELSE 0 END) as false_count,
-                   COUNT(DISTINCT date) as total_recorded_days
-            FROM days WHERE date BETWEEN ? AND ?
-        ''', (start_date, end_date))
-        return cursor.fetchone()
-
-    def get_period_time_records(self, start_date, end_date):
-        cursor = self.get_cursor()
-        cursor.execute('SELECT project_path, duration FROM time_records WHERE date BETWEEN ? AND ?', (start_date, end_date))
-        return cursor.fetchall()
-
-    def get_raw_day_records(self, date_query_raw):
-        cursor = self.get_cursor()
-        cursor.execute('SELECT start, end, project_path FROM time_records WHERE date = ? ORDER BY start ASC', (date_query_raw,))
-        return cursor.fetchall()
-
-    def get_monthly_aggregated_records(self, date_prefix):
-        cursor = self.get_cursor()
-        cursor.execute('''
-            SELECT project_path, SUM(duration) as monthly_duration
-            FROM time_records WHERE date LIKE ? GROUP BY project_path
-        ''', (date_prefix,))
-        return cursor.fetchall()
-
-    def get_monthly_total_duration(self, date_prefix):
-        cursor = self.get_cursor()
-        cursor.execute('SELECT SUM(duration) as total_duration FROM time_records WHERE date LIKE ?', (date_prefix,))
-        row = cursor.fetchone()
-        return row['total_duration'] if row and row['total_duration'] is not None else 0
-
-class LogFileParser:
-    """Parses time tracking log files and stores data using TimeTrackerDB."""
-
-    def __init__(self, db_manager: TimeTrackerDB):
-        self.db_manager = db_manager
-
-    @staticmethod
-    def _time_to_seconds(t_str):
-        # Assuming t_str is always valid "HH:MM" and not empty due to external validation
-        h, m = map(int, t_str.split(':'))
+def return_color(study_time):
+    hours = study_time / 3600
+    if hours == 0:
+        return DEFAULT_COLOR_PALETTE[0]
+    elif hours < 4:
+        return DEFAULT_COLOR_PALETTE[1]
+    elif hours < 8:
+        return DEFAULT_COLOR_PALETTE[2]
+    elif hours < 10:
+        return DEFAULT_COLOR_PALETTE[3]
+    elif hours < 12:
+        return DEFAULT_COLOR_PALETTE[4]
+    else:
+        return YELLOW
+def generate_heatmap(conn, year, output_file):
+    from datetime import datetime, timedelta
+    study_times = get_study_times(conn, year)
+    
+    # 设置起止日期
+    start_date = datetime(year, 1, 1)
+    end_date = datetime(year, 12, 31)
+    
+    # 计算前置空白天数（GitHub 热力图从周日开始）
+    first_weekday = start_date.weekday()  # 0=周一, ..., 6=周日
+    front_empty_days = (6 - first_weekday) % 7 if first_weekday != 6 else 0
+    
+    # 计算总天数和后置空白天数
+    total_days = (end_date - start_date).days + 1
+    total_slots = front_empty_days + total_days
+    back_empty_days = (7 - (total_slots % 7)) % 7
+    
+    # 生成 heatmap_data
+    heatmap_data = []
+    # 前置空白天
+    for _ in range(front_empty_days):
+        heatmap_data.append((None, 'empty', 0))
+    # 年份内的天
+    current_date = start_date
+    while current_date <= end_date:
+        date_str = current_date.strftime("%Y%m%d")
+        study_time = study_times.get(date_str, 0)
+        color = return_color(study_time)
+        heatmap_data.append((current_date, color, study_time))
+        current_date += timedelta(days=1)
+    # 后置空白天
+    for _ in range(back_empty_days):
+        heatmap_data.append((None, 'empty', 0))
+    
+    # SVG 设置
+    cell_size = 12  # 方块大小：12x12 像素
+    spacing = 3   # 方块间距：3 像素
+    weeks = 53    # 列数：53 周
+    rows = 7      # 行数：7 天
+    
+    # 调整 SVG 尺寸以容纳标记
+    margin_top = 20  # 顶部留白（用于月份标记）
+    margin_left = 30  # 左侧留白（用于星期标记）
+    width = margin_left + weeks * (cell_size + spacing)
+    height = margin_top + rows * (cell_size + spacing)
+    
+    # 生成 SVG
+    svg = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">']
+    
+    # 添加星期标记（纵坐标）
+    days_of_week = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    for i, day in enumerate(days_of_week):
+        y = margin_top + i * (cell_size + spacing) + cell_size / 2
+        svg.append(f'<text x="0" y="{y}" font-size="10" alignment-baseline="middle">{day}</text>')
+    
+    # 添加月份标记（横坐标）
+    months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    month_positions = []
+    current_month = start_date.month
+    for i, (date, _, _) in enumerate(heatmap_data):
+        if date and date.month != current_month:
+            month_positions.append((current_month, i // 7))
+            current_month = date.month
+    month_positions.append((current_month, len(heatmap_data) // 7))
+    
+    for month, week_index in month_positions:
+        x = margin_left + week_index * (cell_size + spacing)
+        svg.append(f'<text x="{x}" y="{margin_top - 5}" font-size="10" text-anchor="middle">{month}</text>')
+    
+    # 添加方块
+    for i, (date, color, study_time) in enumerate(heatmap_data):
+        if date is not None:  # 只为实际日期生成方块
+            # 计算方块位置
+            week_index = i // 7  # 第几周
+            day_index = i % 7   # 星期几（0=周日, ..., 6=周六）
+            x = margin_left + week_index * (cell_size + spacing)
+            y = margin_top + day_index * (cell_size + spacing)
+            # 格式化学习时间
+            duration_str = time_format_duration(study_time)
+            title_text = f"{date.strftime('%Y-%m-%d')}: {duration_str}"
+            # 添加矩形方块和 <title> 提示
+            svg.append(f'<rect width="{cell_size}" height="{cell_size}" x="{x}" y="{y}" fill="{color}" rx="2" ry="2">')
+            svg.append(f'    <title>{title_text}</title>')
+            svg.append(f'</rect>')
+    
+    svg.append('</svg>')
+    
+    # 生成 HTML 文件
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>GitHub Style Heatmap</title>
+    </head>
+    <body>
+        <div style="padding: 20px;">
+        {''.join(svg)}
+        </div>
+    </body>
+    </html>
+    """
+    with open(output_file, 'w') as f:
+        f.write(html)
+def time_to_seconds(t):
+    try:
+        if not t: return 0
+        h, m = map(int, t.split(':'))
         return h * 3600 + m * 60
-
-    @staticmethod
-    def _reset_day_info():
-        return {'status': 'False', 'remark': '', 'getup_time': '00:00'}
-
-    def _parse_time_log_line(self, line_content, filepath, line_num):
-        # Assuming line_content is always valid and matches the regex due to external validation
-        match = re.match(r'^(\d{1,2}:\d{2})~(\d{1,2}:\d{2})\s*([a-zA-Z0-9_-]+)', line_content)
-        # If match is None here, it means external validation failed or regex is not robust for "valid" inputs.
-        # For this exercise, we assume match will not be None.
-        start_str, end_str, project_path = match.groups()
-        project_path = project_path.lower().replace('stduy', 'study') # Normalization
-
-        start_sec = self._time_to_seconds(start_str)
-        end_sec = self._time_to_seconds(end_str)
-
-        if end_sec < start_sec: # Handle overnight records
-            end_sec += 86400
-
-        duration = end_sec - start_sec
-        # Assuming duration will be non-negative due to valid inputs and correct overnight logic
-        return start_str, end_str, project_path, duration
-
-    def _commit_day_entries_to_db(self, current_date_val, day_info_val, time_records_list):
-        if not current_date_val:
-            return
-        self.db_manager.update_day_details(current_date_val, day_info_val['status'], day_info_val['remark'], day_info_val['getup_time'])
-        for start_r, end_r, project_path_r, duration_r in time_records_list:
-            self.db_manager.insert_time_record(current_date_val, start_r, end_r, project_path_r, duration_r)
-            self.db_manager.update_project_hierarchy(project_path_r)
-
-    def parse_file(self, filepath):
-        current_date = None
-        day_info = self._reset_day_info()
-        time_records = []
-
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                for line_num, line_text in enumerate(f, 1):
-                    line_text = line_text.strip()
-                    if not line_text: continue
-
-                    try:
-                        if line_text.startswith('Date:'):
-                            if current_date:
-                                self._commit_day_entries_to_db(current_date, day_info, time_records)
-                            current_date = line_text[5:].strip()
-                            day_info = self._reset_day_info()
-                            time_records = []
-                            self.db_manager.insert_day_record_if_not_exists(current_date)
-                        elif line_text.startswith('Status:'):
-                            if current_date: day_info['status'] = line_text[7:].strip()
-                        elif line_text.startswith('Remark:'):
-                            if current_date: day_info['remark'] = line_text[7:].strip()
-                        elif line_text.startswith('Getup:'):
-                            if current_date: day_info['getup_time'] = line_text[6:].strip()
-                        elif '~' in line_text:
-                            if current_date:
-                                parsed_entry = self._parse_time_log_line(line_text, filepath, line_num)
-                                time_records.append(parsed_entry)
-                    except Exception as e_line:
-                        # Silently skip the problematic line if an unexpected error occurs during its processing
-                        # This assumes external validation should have caught format issues.
-                        # print(f"Error processing line {line_num} in {os.path.basename(filepath)}: '{line_text}'. Error: {e_line}. Skipping.")
-                        continue
-            if current_date:
-                self._commit_day_entries_to_db(current_date, day_info, time_records)
-            self.db_manager.commit()
-        except FileNotFoundError:
-            print(f"错误: 文件未找到 '{filepath}'") # This is a system error, not input text validation
-            self.db_manager.rollback()
-        except Exception as e_file:
-            print(f"解析文件 '{filepath}' 时发生严重错误: {e_file}") # General file processing error
-            self.db_manager.rollback()
-
-
-class ReportFormatter:
-    """Formats and prints reports based on data from TimeTrackerDB."""
-
-    def __init__(self, db_manager: TimeTrackerDB):
-        self.db_manager = db_manager
-
-    @staticmethod
-    def _format_duration(seconds, avg_days=1):
-        # Assuming 'seconds' and 'avg_days' are of correct types from internal calls
-        if not isinstance(seconds, (int, float)): seconds = 0 # Basic safeguard
-        if not isinstance(avg_days, (int, float)) or avg_days <= 0 : avg_days = 1 # Basic safeguard
-
-        if seconds < 0: seconds = 0 # Safeguard for display logic
-
-        total_hours = int(seconds // 3600)
-        total_minutes = int((seconds % 3600) // 60)
-
-        time_str = f"{total_hours}h{total_minutes:02d}m"
-        if total_hours == 0 and total_minutes == 0:
-            time_str = "<1m" if seconds > 0 else "0m"
-
-        if avg_days > 0 and avg_days != 1: # Check avg_days again in case it was reset to 1
-            avg_seconds_per_day = seconds / avg_days
-            avg_hours = int(avg_seconds_per_day // 3600)
-            avg_minutes = int((avg_seconds_per_day % 3600) // 60)
-            avg_str = f"{avg_hours}h{avg_minutes:02d}m/day"
-            return f"{time_str} ({avg_str})"
+    except:
+        return 0
+def time_format_duration(seconds, avg_days=1):
+    '''总时间长度和平均长度函数'''
+    # 计算总时长
+    total_hours = seconds // 3600
+    total_minutes = (seconds % 3600) // 60
+    time_str = f"{total_hours}h{total_minutes:02d}m" if total_hours > 0 else f"{total_minutes}m"
+    
+    # 如果 avg_days > 1，计算并格式化平均时长
+    if avg_days > 1:
+        total_h = seconds / 3600  # 总小时数
+        avg_h = total_h / avg_days  # 平均小时数
+        avg_hours = int(avg_h)  # 整数小时部分
+        fractional_hours = avg_h - avg_hours  # 小数小时部分
+        avg_minutes = int(fractional_hours * 60 + 0.5)  # 转换为分钟并四舍五入
+        avg_str = f"{avg_hours}h{avg_minutes:02d}m"  # 平均时长字符串
+        return f"{time_str} ({avg_str}/day)"
+    else:
         return time_str
 
-    def _generate_sorted_output_lines(self, node, avg_days=1, indent=0):
-        lines = []
-        children_items = node.get('children', {})
-        if not isinstance(children_items, dict): children_items = {}
+def get_study_times(conn, year):
+    cursor = conn.cursor()
+    start_date = f"{year}0101"
+    end_date = f"{year}1231"
+    cursor.execute('''
+        SELECT date, SUM(duration)
+        FROM time_records
+        WHERE date BETWEEN ? AND ?
+        AND (project_path = 'study' OR project_path LIKE 'study_%')
+        GROUP BY date
+    ''', (start_date, end_date))
+    study_times = dict(cursor.fetchall())
+    return study_times
+def init_db():
+    conn = sqlite3.connect('time_tracking.db')
+    cursor = conn.cursor()
+    
+    cursor.executescript('''
+        CREATE TABLE IF NOT EXISTS days (
+            date TEXT PRIMARY KEY,
+            status TEXT,
+            remark TEXT,
+            getup_time TEXT
+        );
+        
+        CREATE TABLE IF NOT EXISTS time_records (
+            date TEXT,
+            start TEXT,
+            end TEXT,
+            project_path TEXT,
+            duration INTEGER,
+            PRIMARY KEY(date, start)
+        );
+        
+        CREATE TABLE IF NOT EXISTS parent_child (
+            child TEXT PRIMARY KEY,
+            parent TEXT
+        );
+        
+        CREATE TABLE IF NOT EXISTS parent_time (
+            date TEXT,
+            parent TEXT,
+            duration INTEGER,
+            PRIMARY KEY(date, parent)
+        );
+    ''')
+    
+    # Predefined top-level mappings (no longer hardcoding all combinations)
+    top_level_map = {
+        'study': 'STUDY',
+        'code': 'CODE',
+        'routine': 'ROUTINE',
+        'break': 'BREAK',
+        'rest': 'REST',
+        'exercise': 'EXERCISE',
+        'sleep': 'SLEEP',
+        'recreation': 'RECREATION',
+        'other': 'OTHER',
+        'meal': 'MEAL',
+        'program':'Program',
+        'arrange':'ARRANGE',
+    }
+    
+    # Insert only top-level mappings; sub-levels will be built dynamically
+    for child, parent in top_level_map.items():
+        cursor.execute('''
+            INSERT OR IGNORE INTO parent_child (child, parent)
+            VALUES (?, ?)
+        ''', (child, parent))
+    
+    conn.commit()
+    return conn
+def parse_file(conn, filepath):
+    '''解析文输入的文件'''
+    cursor = conn.cursor()
+    current_date = None
+    day_info = {'status': 'False', 'remark': '', 'getup_time': '00:00'}
+    time_records = []
 
-        children = sorted(children_items.items(), key=lambda x: x[1].get('duration', 0), reverse=True)
+    with open(filepath, 'r', encoding='utf-8') as f:
+        for line_num, line in enumerate(f, 1):
+            try:
+                line = line.strip()
+                if not line:
+                    continue
 
-        for key, value in children:
-            duration = value.get('duration', 0)
-            has_children = isinstance(value, dict) and value.get('children')
-            if duration > 0 or has_children:
-                lines.append('  ' * indent + f"{key}: {self._format_duration(duration, avg_days)}")
-                if has_children:
-                    lines.extend(self._generate_sorted_output_lines(value, avg_days, indent + 1))
-        return lines
+                if line.startswith('Date:'):
+                    if current_date:
+                        cursor.execute('''
+                            UPDATE days SET status=?, remark=?, getup_time=?
+                            WHERE date=?
+                        ''', (day_info['status'], day_info['remark'], day_info['getup_time'], current_date))
+                        for start, end, project_path, duration in time_records:
+                            cursor.execute('''
+                                INSERT OR REPLACE INTO time_records 
+                                VALUES (?, ?, ?, ?, ?)
+                            ''', (current_date, start, end, project_path, duration))
+                            parts = project_path.split('_')
+                            for i in range(len(parts)):
+                                child = '_'.join(parts[:i+1])
+                                parent = '_'.join(parts[:i]) if i > 0 else parts[0]
+                                cursor.execute('SELECT parent FROM parent_child WHERE child = ?', (parent,))
+                                parent_result = cursor.fetchone()
+                                if parent_result:
+                                    parent = parent_result[0]
+                                elif i == 0:
+                                    cursor.execute('SELECT parent FROM parent_child WHERE child = ?', (child,))
+                                    if not cursor.fetchone():
+                                        cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', 
+                                                       (child, 'STUDY' if child == 'study' else child.upper()))
+                                    continue
+                                cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', (child, parent))
+                        day_info = {'status': 'False', 'remark': '', 'getup_time': '00:00'}
+                        time_records = []
+                    current_date = line[5:].strip()
+                    cursor.execute('INSERT OR IGNORE INTO days (date) VALUES (?)', (current_date,))
+                elif line.startswith('Status:'):
+                    day_info['status'] = line[7:].strip()
+                elif line.startswith('Remark:'):
+                    day_info['remark'] = line[7:].strip()
+                elif line.startswith('Getup:'):
+                    day_info['getup_time'] = line[6:].strip()
+                elif '~' in line:
+                    # 修改正则表达式允许连字符和数字
+                    match = re.match(r'^(\d+:\d+)~(\d+:\d+)\s*([a-zA-Z0-9_-]+)', line) 
+                    if not match:
+                        print(f"格式错误在 {os.path.basename(filepath)} 第{line_num}行: {line}")
+                        continue
+                    start, end, project_path = match.groups()
+                    project_path = project_path.lower().replace('stduy', 'study')
+                    start_sec = time_to_seconds(start)
+                    end_sec = time_to_seconds(end)
+                    if end_sec < start_sec:
+                        end_sec += 86400
+                    duration = end_sec - start_sec
+                    time_records.append((start, end, project_path, duration))
+            except Exception as e:
+                print(f"解析错误在 {os.path.basename(filepath)} 第{line_num}行: {line}")
+                print(f"错误信息: {str(e)}")
+                continue
 
-    def _build_project_tree(self, records):
-        tree = defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)})
-        for record in records:
-            project_path, duration_val = record['project_path'], record['duration']
+    if current_date:
+        cursor.execute('''
+            UPDATE days SET status=?, remark=?, getup_time=?
+            WHERE date=?
+        ''', (day_info['status'], day_info['remark'], day_info['getup_time'], current_date))
+        for start, end, project_path, duration in time_records:
+            cursor.execute('''
+                INSERT OR REPLACE INTO time_records 
+                VALUES (?, ?, ?, ?, ?)
+            ''', (current_date, start, end, project_path, duration))
             parts = project_path.split('_')
-            if not parts: continue
+            for i in range(len(parts)):
+                child = '_'.join(parts[:i+1])
+                parent = '_'.join(parts[:i]) if i > 0 else parts[0]
+                cursor.execute('SELECT parent FROM parent_child WHERE child = ?', (parent,))
+                parent_result = cursor.fetchone()
+                if parent_result:
+                    parent = parent_result[0]
+                elif i == 0:
+                    cursor.execute('SELECT parent FROM parent_child WHERE child = ?', (child,))
+                    if not cursor.fetchone():
+                        cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', 
+                                       (child, 'STUDY' if child == 'study' else child.upper()))
+                    continue
+                cursor.execute('INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)', (child, parent))
 
-            top_level_key = self.db_manager.get_top_level_parent_for_project(parts[0])
-            current_level_node = tree[top_level_key]
-            current_level_node['duration'] += duration_val
+    conn.commit()
 
+
+
+
+def generate_sorted_output(node, avg_days=1, indent=0):
+    """递归生成按时间降序排列的输出行，仅输出有有效数据的子节点"""
+    lines = []
+    # 从 'children' 键中获取子项目
+    children = [(k, v) for k, v in node['children'].items()] if 'children' in node else []
+    # 按时长降序排序
+    sorted_children = sorted(children, key=lambda x: x[1].get('duration', 0), reverse=True)
+    
+    for key, value in sorted_children:
+        duration = value.get('duration', 0)
+        has_children = 'children' in value and value['children']
+        # 仅当 duration > 0 或有子节点时输出
+        if duration > 0 or has_children:
+            lines.append('  ' * indent + f"{key}: {time_format_duration(duration, avg_days)}")
+            # 递归处理子节点
+            if has_children:
+                lines.extend(generate_sorted_output(value, avg_days, indent + 1))
+    return lines
+def query_day(conn, date):
+    '''查询某日'''
+    cursor = conn.cursor()
+    cursor.execute('SELECT status, remark, getup_time FROM days WHERE date = ?', (date,))
+    day_data = cursor.fetchone()
+    
+    if not day_data:
+        print(f"\n[{date}]\n无相关记录!")
+        return
+    
+    status, remark, getup = day_data
+    output = [f"\nDate:{date}", f"Status:{status}", f"Getup:{getup}"]
+    if remark.strip():
+        output.append(f"Remark:{remark}")
+    
+    cursor.execute('SELECT project_path, duration FROM time_records WHERE date = ?', (date,))
+    records = cursor.fetchall()
+    
+    # 计算总时间
+    cursor.execute('SELECT SUM(duration) FROM time_records WHERE date = ?', (date,))
+    total_duration = cursor.fetchone()[0] or 0
+    total_h = total_duration // 3600
+    total_m = (total_duration % 3600) // 60
+    total_minutes = total_duration // 60
+    output.append(f"Total: {total_h}h{total_m:02d}m ({total_minutes} minutes)")
+    
+    if records:
+        # 修改树形结构，添加 'children' 键
+        tree = defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)})
+        for project_path, duration in records:
+            parts = project_path.split('_')
+            if not parts:
+                continue
+            # 处理顶层项目
+            top_level = 'STUDY' if parts[0].lower() == 'study' else parts[0].upper()
+            tree[top_level]['duration'] += duration
+            current = tree[top_level]
+            # 处理子项目
             for part in parts[1:]:
-                if not isinstance(current_level_node.get('children'), dict):
-                    current_level_node['children'] = defaultdict(dict)
-                if part not in current_level_node['children']:
-                    current_level_node['children'][part] = {'duration': 0, 'children': defaultdict(dict)}
-                current_level_node['children'][part]['duration'] += duration_val
-                current_level_node = current_level_node['children'][part]
-        return tree
-
-    def print_day_report(self, date_query):
-        day_data = self.db_manager.get_day_info(date_query)
-        if not day_data:
-            print(f"\n[{date_query}]\n无相关记录!")
-            return
-
-        output = [f"\nDate:{date_query}", f"Status:{day_data['status']}", f"Getup:{day_data['getup_time']}"]
-        if day_data['remark'] and day_data['remark'].strip():
-            output.append(f"Remark:{day_data['remark']}")
-
-        total_duration_day = self.db_manager.get_day_total_duration(date_query)
-        output.append(f"Total: {self._format_duration(total_duration_day, avg_days=1)}")
-
-        records = self.db_manager.get_day_time_records(date_query)
-        if records:
-            tree = self._build_project_tree(records)
-            sorted_top_level = sorted(tree.items(), key=lambda x: x[1]['duration'], reverse=True)
-            for top_level, subtree in sorted_top_level:
-                percentage = (subtree['duration'] / total_duration_day * 100) if total_duration_day else 0
-                output.append(f"\n{top_level}: {self._format_duration(subtree['duration'])} ({percentage:.2f}%)")
-                output.extend(self._generate_sorted_output_lines(subtree, avg_days=1, indent=1))
-        print('\n'.join(output))
-
-    def print_period_report(self, days_to_query):
-        end_date_dt = datetime.now()
-        start_date_dt = end_date_dt - timedelta(days=days_to_query - 1)
-        end_date_str_q = end_date_dt.strftime("%Y%m%d")
-        start_date_str_q = start_date_dt.strftime("%Y%m%d")
-
-        output_lines = [f"\n[最近{days_to_query}天统计] {start_date_str_q} - {end_date_str_q}"]
-        status_data = self.db_manager.get_period_status_summary(start_date_str_q, end_date_str_q)
-
-        true_count = status_data['true_count'] if status_data else 0
-        false_count = status_data['false_count'] if status_data else 0
-        total_recorded_days = status_data['total_recorded_days'] if status_data else 0
-
-        output_lines.append(f"有状态记录天数: {total_recorded_days}天 / {days_to_query}天")
-        output_lines.append("状态分布 (基于有记录的天数):")
-        if total_recorded_days > 0:
-            output_lines.append(f" True: {true_count}天 ({(true_count / total_recorded_days * 100):.1f}%)")
-            output_lines.append(f" False: {false_count}天 ({(false_count / total_recorded_days * 100):.1f}%)")
-        else:
-            output_lines.extend([" True: 0天 (0.0%)", " False: 0天 (0.0%)"])
-
-        records = self.db_manager.get_period_time_records(start_date_str_q, end_date_str_q)
-        if not records:
-            output_lines.append("\n期间无有效时间记录")
-            print('\n'.join(output_lines))
-            return
-
-        grand_total_duration = sum(rec['duration'] for rec in records if rec['duration'] is not None)
-        output_lines.append(f"\n期间总时间: {self._format_duration(grand_total_duration, days_to_query)}")
-
-        tree = self._build_project_tree(records)
+                if not isinstance(current['children'].get(part), dict):
+                    current['children'][part] = {'duration': 0, 'children': defaultdict(dict)}
+                current['children'][part]['duration'] += duration
+                current = current['children'][part]
+        
+        # 按顶层项目总时长排序
         sorted_top_level = sorted(tree.items(), key=lambda x: x[1]['duration'], reverse=True)
         for top_level, subtree in sorted_top_level:
-            cat_total = subtree['duration']
-            percentage = (cat_total / grand_total_duration * 100) if grand_total_duration else 0
-            output_lines.append(f"\n{top_level}: {self._format_duration(cat_total, days_to_query)} ({percentage:.2f}%)")
-            output_lines.extend(self._generate_sorted_output_lines(subtree, avg_days=days_to_query, indent=1))
-        print('\n'.join(output_lines))
+            percentage = (subtree['duration'] / total_duration * 100) if total_duration else 0
+            output.append(f"\n{top_level}: {time_format_duration(subtree['duration'])} ({percentage:.2f}%)")
+            # 传递 avg_days=1 以适应单日查询
+            output.extend(generate_sorted_output(subtree, avg_days=1, indent=1))
+    
+    print('\n'.join(output))
 
-    def print_raw_day_report(self, date_query_raw):
-        day_data = self.db_manager.get_day_info(date_query_raw)
-        if not day_data:
-            print(f"日期 {date_query_raw} 无记录") # Check if data exists, not input format
-            return
+def query_period(conn, days):
+    '''查询最近几天'''
+    cursor = conn.cursor()
+    end_date = datetime.now().strftime("%Y%m%d")
+    start_date = (datetime.now() - timedelta(days=days-1)).strftime("%Y%m%d")
 
-        output = [f"Date:{date_query_raw}", f"Status:{day_data['status']}", f"Getup:{day_data['getup_time']}"]
-        output.append(f"Remark:{day_data['remark'] if day_data['remark'] and day_data['remark'].strip() else ''}")
+    cursor.execute('''
+        SELECT 
+            SUM(CASE WHEN status = 'True' THEN 1 ELSE 0 END) as true_count,
+            SUM(CASE WHEN status = 'False' THEN 1 ELSE 0 END) as false_count,
+            COUNT(*) as total_days
+        FROM days 
+        WHERE date BETWEEN ? AND ?
+    ''', (start_date, end_date))
+    
+    status_data = cursor.fetchone()
+    true_count = status_data[0] or 0
+    false_count = status_data[1] or 0
+    total_days = status_data[2] or 0
 
-        records = self.db_manager.get_raw_day_records(date_query_raw)
-        for rec in records:
-            output.append(f"{rec['start']}~{rec['end']} {rec['project_path']}")
-        print('\n'.join(output))
+    print(f"\n[最近{days}天统计]{start_date} - {end_date}")
+    print(f"有效记录天数:{total_days}天")
+    print("状态分布:")
+    print(f" True: {true_count}天 ({(true_count/total_days*100 if total_days>0 else 0):.1f}%)")
+    print(f" False: {false_count}天 ({(false_count/total_days*100 if total_days>0 else 0):.1f}%)")
 
-    def print_month_report(self, year_month_str_q):
-        # Assuming year_month_str_q is valid "YYYYMM" due to external validation
-        year_val, month_val = int(year_month_str_q[:4]), int(year_month_str_q[4:6])
-        try:
-            _, last_day = calendar.monthrange(year_val, month_val)
-        except calendar.IllegalMonthError: # This is for invalid month numbers like 13
-            print(f"无效的月份数值: {month_val}") # Keep for truly invalid date logic
-            return
-
-        actual_days = last_day
-        date_prefix = f"{year_val}{month_val:02d}%"
-
-        grand_total_duration = self.db_manager.get_monthly_total_duration(date_prefix)
-        records = self.db_manager.get_monthly_aggregated_records(date_prefix)
-
-        output = [f"\n[{year_val}年{month_val}月 统计 ({actual_days}天)]"]
-        output.append(f"总时间: {self._format_duration(grand_total_duration, actual_days)}")
-
-        if not records and grand_total_duration == 0:
-            output.append("本月无有效时间记录")
-            print('\n'.join(output))
-            return
-
-        tree = defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)})
-        for record in records:
-            project_path, duration_sum = record['project_path'], record['monthly_duration']
-            parts = project_path.split('_')
-            if not parts: continue
-
-            top_level_key = self.db_manager.get_top_level_parent_for_project(parts[0])
-            current_node = tree[top_level_key]
-            current_node['duration'] += duration_sum
-
-            temp_node_for_subparts = current_node
-            for part in parts[1:]:
-                if not isinstance(temp_node_for_subparts.get('children'), dict):
-                    temp_node_for_subparts['children'] = defaultdict(dict)
-                if part not in temp_node_for_subparts['children']:
-                    temp_node_for_subparts['children'][part] = {'duration': 0, 'children': defaultdict(dict)}
-                temp_node_for_subparts['children'][part]['duration'] += duration_sum
-                temp_node_for_subparts = temp_node_for_subparts['children'][part]
-
-        sorted_top_level = sorted(tree.items(), key=lambda x: x[1].get('duration', 0), reverse=True)
-        for top_level, subtree in sorted_top_level:
-            cat_total = subtree['duration']
-            percentage = (cat_total / grand_total_duration * 100) if grand_total_duration else 0
-            output.append(f"\n{top_level}: {self._format_duration(cat_total, actual_days)} ({percentage:.2f}%)")
-            output.extend(self._generate_sorted_output_lines(subtree, avg_days=actual_days, indent=1))
-        print('\n'.join(output))
-
-
-class HeatmapVisualizer:
-    """Generates HTML heatmaps for study times."""
-
-    def __init__(self, db_manager: TimeTrackerDB):
-        self.db_manager = db_manager
-
-    @staticmethod
-    def _return_color(study_time_seconds):
-        hours = study_time_seconds / 3600
-        if hours == 0: return DEFAULT_COLOR_PALETTE[0]
-        if hours < 4: return DEFAULT_COLOR_PALETTE[1]
-        if hours < 8: return DEFAULT_COLOR_PALETTE[2]
-        if hours < 10: return DEFAULT_COLOR_PALETTE[3]
-        if hours < 12: return DEFAULT_COLOR_PALETTE[4]
-        return YELLOW
-
-    def generate_yearly_heatmap(self, year, output_file):
-        # Assuming 'year' is a valid integer year due to external validation
-        study_times = self.db_manager.get_study_times_for_year(year)
-
-        start_date = datetime(year, 1, 1)
-        end_date = datetime(year, 12, 31)
+    cursor.execute('SELECT project_path, duration FROM time_records WHERE date BETWEEN ? AND ?', 
+                   (start_date, end_date))
+    records = cursor.fetchall()
+    
+    if not records:
+        print("\n无有效时间记录")
+        return
+    
+    # Build hierarchical tree
+    tree = defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)})
+    for project_path, duration in records:
+        parts = project_path.split('_')
+        if not parts:
+            continue
         
-        front_empty_days = (start_date.isoweekday()) % 7
-
-        heatmap_data = []
-        for _ in range(front_empty_days):
-            heatmap_data.append((None, 'empty', 0))
-
-        current_date_iter = start_date
-        while current_date_iter <= end_date:
-            date_str = current_date_iter.strftime("%Y%m%d")
-            study_duration = study_times.get(date_str, 0)
-            color = self._return_color(study_duration)
-            heatmap_data.append((current_date_iter, color, study_duration))
-            current_date_iter += timedelta(days=1)
-
-        total_cells_filled = front_empty_days + (end_date - start_date).days + 1
-        back_empty_days = (7 - (total_cells_filled % 7)) % 7
-        for _ in range(back_empty_days):
-            heatmap_data.append((None, 'empty', 0))
-
-        cell_size, spacing, weeks, rows = 12, 3, (len(heatmap_data) // 7) , 7
-        margin_top, margin_left = 20, 35
-        width = margin_left + weeks * (cell_size + spacing) - spacing
-        height = margin_top + rows * (cell_size + spacing) - spacing
-
-        svg = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">']
-        days_of_week_labels = ["", "Mon", "", "Wed", "", "Fri", ""]
+         # 处理顶层项目
+        top_level = 'STUDY' if parts[0].lower() == 'study' else parts[0].upper()
+        tree[top_level]['duration'] += duration
         
-        for i, day_label in enumerate(days_of_week_labels):
-            if day_label:
-                y_pos = margin_top + i * (cell_size + spacing) + cell_size * 0.7
-                svg.append(f'<text x="{margin_left-10}" y="{y_pos}" font-size="9" text-anchor="end" alignment-baseline="middle">{day_label}</text>')
+        # 处理子层级
+        current = tree[top_level]
+        for part in parts[1:]:
+            if not isinstance(current['children'].get(part), dict):
+                current['children'][part] = {'duration': 0, 'children': defaultdict(dict)}
+            current['children'][part]['duration'] += duration
+            current = current['children'][part]
+
+    # 按总时长排序顶层项目
+    sorted_top_level = sorted(tree.items(), key=lambda x: x[1]['duration'], reverse=True)
+    
+    for top_level, subtree in sorted_top_level:
+        total_duration = subtree['duration']
+        print(f"\n{top_level}: {time_format_duration(total_duration, days)}")
+        # 使用统一的排序输出函数
+        print('\n'.join(generate_sorted_output(subtree, avg_days=days, indent=1)))
+
+def query_day_raw(conn, date):
+    '''输出一日的原始内容'''
+    cursor = conn.cursor()
+    
+    # 查询基础信息
+    cursor.execute('''
+        SELECT date, status, getup_time, remark 
+        FROM days 
+        WHERE date = ?
+    ''', (date,))
+    day_data = cursor.fetchone()
+    
+    if not day_data:
+        print(f"日期 {date} 无记录")
+        return
+    
+    db_date, status, getup, remark = day_data
+    
+    # 查询时间记录
+    cursor.execute('''
+        SELECT start, end, project_path 
+        FROM time_records 
+        WHERE date = ? 
+        ORDER BY start
+    ''', (date,))
+    records = cursor.fetchall()
+    
+    # 构建原始格式输出
+    output = []
+    output.append(f"Date:{db_date}")
+    output.append(f"Status:{status}")
+    output.append(f"Getup:{getup}")
+    output.append(f"Remark:{remark}")
+    
+    for start, end, project in records:
+        output.append(f"{start}~{end}{project}")
+    
+    print('\n'.join(output))
+def query_month_summary(conn, year_month):
+    '''查询某月的数据'''
+    cursor = conn.cursor()
+    
+    # 解析年月并验证
+    if not re.match(r'^\d{6}$', year_month):
+        print("月份格式错误,应为YYYYMM")
+        return
+    
+    year = int(year_month[:4])
+    month = int(year_month[4:6])
+    last_day = calendar.monthrange(year, month)[1]
+    actual_days = last_day  # 实际当月天数
+    
+    date_prefix = f"{year}{month:02d}%"
+    cursor.execute('''
+        SELECT project_path, SUM(duration)
+        FROM time_records
+        WHERE date LIKE ?
+        GROUP BY project_path
+    ''', (date_prefix,))
+    records = cursor.fetchall()
+
+    if not records:
+        print(f"没有找到{year_month}的记录")
+        return
+
+    tree = defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)})
+    for project_path, duration in records:
+        parts = project_path.split('_')
+        if not parts:
+            continue
         
-        month_markers = {}
-        for i, (date_obj, _, _) in enumerate(heatmap_data):
-            if date_obj:
-                week_idx = i // 7
-                month_num = date_obj.month
-                if date_obj.day == 1 and month_num not in month_markers :
-                    if not any(m_col == week_idx for m_col in month_markers.values()):
-                        month_markers[month_num] = week_idx
+        top_level = 'STUDY' if parts[0].lower() == 'study' else parts[0].upper()
+        tree[top_level]['duration'] += duration
         
-        for month_num, week_idx in month_markers.items():
-            x_pos = margin_left + week_idx * (cell_size + spacing)
-            svg.append(f'<text x="{x_pos}" y="{margin_top - 8}" font-size="10" text-anchor="start">{calendar.month_abbr[month_num]}</text>')
+        current = tree[top_level]
+        for part in parts[1:]:
+            if not isinstance(current['children'].get(part), dict):
+                current['children'][part] = {'duration': 0, 'children': defaultdict(dict)}
+            current['children'][part]['duration'] += duration
+            current = current['children'][part]
 
-        for i, (date_val, color_val, study_duration_val) in enumerate(heatmap_data):
-            if date_val is not None:
-                week_index = i // 7
-                day_index = i % 7
-                x_pos = margin_left + week_index * (cell_size + spacing)
-                y_pos = margin_top + day_index * (cell_size + spacing)
-                duration_str = ReportFormatter._format_duration(study_duration_val)
-                title_text = f"{date_val.strftime('%Y-%m-%d')}: {duration_str}"
-                svg.append(f'<rect width="{cell_size}" height="{cell_size}" x="{x_pos}" y="{y_pos}" fill="{color_val}" rx="2" ry="2">')
-                svg.append(f'    <title>{title_text}</title>')
-                svg.append(f'</rect>')
-        svg.append('</svg>')
-
-        html = f"""<!DOCTYPE html><html><head><title>Study Heatmap {year}</title></head>
-                 <body><div style="padding:20px;"><h2>Study Heatmap for {year}</h2>{''.join(svg)}</div></body></html>"""
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write(html)
-
-
-class TimeTrackingApp:
-    """Main application class to orchestrate operations."""
-
-    def __init__(self):
-        self.db_manager = TimeTrackerDB()
-        self.parser = LogFileParser(self.db_manager)
-        self.reporter = ReportFormatter(self.db_manager)
-        self.visualizer = HeatmapVisualizer(self.db_manager)
-
-    def run(self):
-        while True:
-            print("\n时间追踪分析器")
-            print("-" * 20)
-            print("0. 处理文件并导入数据")
-            print("1. 查询某日统计")
-            print("2. 查询最近7天")
-            print("3. 查询最近14天")
-            print("4. 查询最近30天")
-            print("5. 输出某天原始数据")
-            print("6. 生成年度学习热力图")
-            print("7. 查询月度统计")
-            print("8. 退出")
-            print("-" * 20)
-            choice = input("请选择操作 (0-8)：").strip()
-
-            if choice == '0':
-                input_path = input("请输入单个文件路径或包含文件的目录路径：").strip('"')
-                input_path = os.path.normpath(input_path)
-                # Assuming input_path is valid and exists, and is either a file or a directory
-                # The differentiation is for processing strategy, not validation of the path itself.
-                if os.path.isfile(input_path):
-                    print(f"\n处理文件: {input_path}")
-                    self.parser.parse_file(input_path)
-                    print("文件处理完成。")
-                elif os.path.isdir(input_path):
-                    print(f"\n扫描目录: {input_path}")
-                    file_count = 0
-                    for root, _, files in os.walk(input_path):
-                        for filename in files:
-                            # Process all files in the directory, assuming they are relevant
+    output = [f"\n[{year_month} 月统计]"]
+    
+    # 按总时长排序顶层项目
+    sorted_top_level = sorted(tree.items(), key=lambda x: x[1].get('duration', 0), reverse=True)
+    
+    total = 0
+    for top_level, subtree in sorted_top_level:
+        total_duration = subtree['duration']
+        total += total_duration
+        output.append(f"{top_level}: {time_format_duration(total_duration, actual_days)}")
+        # 使用统一的排序输出函数
+        output.extend(generate_sorted_output(subtree, avg_days=actual_days, indent=1))
+    
+    # 显示总平均时间
+    total_avg = total/actual_days/3600 if actual_days >0 else 0
+    output.append(f"\n总时间: {time_format_duration(total)} ({total_avg:.2f}h)")
+    print('\n'.join(output))
+def main():
+    conn = init_db()
+    
+    while True:
+        print("\n0. 处理文件并导入数据")
+        print("1. 查询某日统计")
+        print("2. 查询最近7天")
+        print("3. 查询最近14天")
+        print("4. 查询最近30天")
+        print("5. 输出某天原始数据")
+        print("6. 生成热力图")
+        print("7. 月统计数据")  
+        print("8. 退出")       
+        choice = input("请选择操作：")
+        
+        if choice == '0':
+            input_path = input("请输入文件或目录路径：").strip('"')  # 移除可能包裹的引号
+            input_path = os.path.normpath(input_path)  # 规范化路径格式
+            
+            # 处理单个文件的情况
+            if os.path.isfile(input_path) and input_path.lower().endswith('.txt'):
+                print(f"\n处理独立文件: {input_path}")
+                parse_file(conn, input_path)
+            
+            # 处理目录的情况
+            elif os.path.isdir(input_path):
+                print(f"\n扫描目录: {input_path}")
+                file_count = 0
+                for root, _, files in os.walk(input_path):
+                    for filename in files:
+                        if filename.lower().endswith('.txt'):
                             filepath = os.path.join(root, filename)
-                            print(f"  处理文件: {filepath}")
-                            self.parser.parse_file(filepath)
+                            print(f"发现数据文件: {filepath}")
+                            parse_file(conn, filepath)
                             file_count += 1
-                    print(f"目录扫描完成，共处理 {file_count} 个文件。")
-                else:
-                    # This case implies the path was not a file or directory recognized by os.path methods.
-                    # If external validation guarantees it's one or the other, this path might not be hit.
-                    # Or, it could be a special file type not handled. For now, do nothing.
-                    print(f"注意：路径 '{input_path}' 未被识别为常规文件或目录进行处理。")
-            elif choice == '1':
-                date_str = input("请输入日期 (格式 YYYYMMDD): ")
-                # Assuming date_str is always in YYYYMMDD format due to external validation
-                self.reporter.print_day_report(date_str)
-            elif choice in ('2', '3', '4'):
-                days_map = {'2': 7, '3': 14, '4': 30}
-                self.reporter.print_period_report(days_map[choice])
-            elif choice == '5':
-                date_str = input("请输入日期 (格式 YYYYMMDD): ")
-                # Assuming date_str is always in YYYYMMDD format
-                self.reporter.print_raw_day_report(date_str)
-            elif choice == '6':
-                year_str = input("请输入年份 (格式 YYYY): ")
-                # Assuming year_str is always in YYYY format
-                output_filename = f"heatmap_study_{year_str}.html"
-                try:
-                    self.visualizer.generate_yearly_heatmap(int(year_str), output_filename)
-                    print(f"学习热力图已生成：{os.path.abspath(output_filename)}")
-                except Exception as e: print(f"生成热力图失败: {e}")
-            elif choice == '7':
-                year_month_str = input("请输入年月 (格式 YYYYMM): ")
-                # Assuming year_month_str is always in YYYYMM format
-                self.reporter.print_month_report(year_month_str)
-            elif choice == '8':
-                print("正在退出程序...")
-                break
+                print(f"共处理 {file_count} 个数据文件")
+            
+            # 错误路径处理
             else:
-                print("无效选项。") 
-        self.db_manager.close()
+                print(f"错误路径: {input_path} (请确认输入的是.txt文件或有效目录)")
+        elif choice == '1':
+            date = input("请输入日期(如YYYYMMDD):")
+            if re.match(r'^\d{8}$', date):
+                query_day(conn, date)
+            else:
+                print("日期格式错误")
+        elif choice in ('2', '3', '4'):
+            days_map = {'2':7, '3':14, '4':30}
+            query_period(conn, days_map[choice])
+        elif choice == '5':
+            date = input("请输入日期(YYYYMMDD):")
+            if re.match(r'^\d{8}$', date):
+                query_day_raw(conn, date)
+            else:
+                print("日期格式错误")
+        elif choice == '6':  # Handle heatmap generation
+            year = input("请输入年份(YYYY):")
+            if re.match(r'^\d{4}$', year):
+                output_file = f"heatmap_{year}.html"
+                generate_heatmap(conn, int(year), output_file)
+                print(f"热力图已生成：{output_file}")
+            else:
+                print("年份格式错误")
+        elif choice == '7':  # 新增月统计处理
+            year_month = input("请输入年份和月份(如202502):")
+            if re.match(r'^\d{6}$', year_month):
+                query_month_summary(conn, year_month)
+            else:
+                print("月份格式错误")
+        elif choice == '8':  
+            break
+        else:
+            print("请输入选项中的数字")
+    
+    conn.close()
+
 if __name__ == '__main__':
-    app = TimeTrackingApp()
-    app.run()
+    main()
