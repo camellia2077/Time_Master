@@ -412,49 +412,57 @@ def query_period(conn, days):
     status_data = cursor.fetchone()
     true_count = status_data[0] or 0
     false_count = status_data[1] or 0
-    total_days = status_data[2] or 0
+    total_days_with_records = status_data[2] or 0 # Renamed to avoid conflict
 
     print(f"\n[最近{days}天统计]{start_date} - {end_date}")
-    print(f"有效记录天数:{total_days}天")
+    print(f"有效记录天数:{total_days_with_records}天") #
     print("状态分布:")
-    print(f" True: {true_count}天 ({(true_count/total_days*100 if total_days>0 else 0):.1f}%)")
-    print(f" False: {false_count}天 ({(false_count/total_days*100 if total_days>0 else 0):.1f}%)")
+    print(f" True: {true_count}天 ({(true_count/total_days_with_records*100 if total_days_with_records>0 else 0):.1f}%)") #
+    print(f" False: {false_count}天 ({(false_count/total_days_with_records*100 if total_days_with_records>0 else 0):.1f}%)") #
 
     cursor.execute('SELECT project_path, duration FROM time_records WHERE date BETWEEN ? AND ?', 
                    (start_date, end_date))
-    records = cursor.fetchall()
+    records = cursor.fetchall() #
     
     if not records:
-        print("\n无有效时间记录")
+        print("\n无有效时间记录") #
         return
     
+    # Calculate overall total duration first
+    overall_total_duration_seconds = sum(item[1] for item in records)
+    if total_days_with_records > 0: # Use total_days_with_records for average calculation
+        print(f"\n总时间: {time_format_duration(overall_total_duration_seconds, total_days_with_records)}") #
+    else:
+        print(f"\n总时间: {time_format_duration(overall_total_duration_seconds, 1)}") # Avoid division by zero if no days have records but somehow records exist.
+
     # Build hierarchical tree
-    tree = defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)})
+    tree = defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)}) #
     for project_path, duration in records:
-        parts = project_path.split('_')
+        parts = project_path.split('_') #
         if not parts:
             continue
         
          # 处理顶层项目
-        top_level = 'STUDY' if parts[0].lower() == 'study' else parts[0].upper()
-        tree[top_level]['duration'] += duration
+        top_level = 'STUDY' if parts[0].lower() == 'study' else parts[0].upper() #
+        tree[top_level]['duration'] += duration #
         
         # 处理子层级
-        current = tree[top_level]
+        current = tree[top_level] #
         for part in parts[1:]:
-            if not isinstance(current['children'].get(part), dict):
-                current['children'][part] = {'duration': 0, 'children': defaultdict(dict)}
-            current['children'][part]['duration'] += duration
-            current = current['children'][part]
+            if not isinstance(current['children'].get(part), dict): #
+                current['children'][part] = {'duration': 0, 'children': defaultdict(dict)} #
+            current['children'][part]['duration'] += duration #
+            current = current['children'][part] #
 
     # 按总时长排序顶层项目
-    sorted_top_level = sorted(tree.items(), key=lambda x: x[1]['duration'], reverse=True)
+    sorted_top_level = sorted(tree.items(), key=lambda x: x[1]['duration'], reverse=True) #
     
     for top_level, subtree in sorted_top_level:
-        total_duration = subtree['duration']
-        print(f"\n{top_level}: {time_format_duration(total_duration, days)}")
-        # 使用统一的排序输出函数
-        print('\n'.join(generate_sorted_output(subtree, avg_days=days, indent=1)))
+        total_duration = subtree['duration'] #
+        # The overall total is already printed. Now print per-category totals.
+        # The time_format_duration for individual categories should use 'total_days_with_records' (or 'days' if you prefer the original logic for per-category average)
+        print(f"\n{top_level}: {time_format_duration(total_duration, total_days_with_records)}") # 
+        print('\n'.join(generate_sorted_output(subtree, avg_days=total_days_with_records, indent=1))) #
 
 def query_day_raw(conn, date):
     '''输出一日的原始内容'''
@@ -498,37 +506,49 @@ def query_month_summary(conn, year_month):
     '''查询某月的数据'''
     cursor = conn.cursor()
     
-    # 解析年月并验证
-    if not re.match(r'^\d{6}$', year_month):
-        print("月份格式错误,应为YYYYMM")
+    if not re.match(r'^\d{6}$', year_month): #
+        print("月份格式错误,应为YYYYMM") #
         return
     
-    year = int(year_month[:4])
-    month = int(year_month[4:6])
-    last_day = calendar.monthrange(year, month)[1]
-    actual_days = last_day  # 实际当月天数
+    year = int(year_month[:4]) #
+    month = int(year_month[4:6]) #
+    last_day = calendar.monthrange(year, month)[1] #
+    actual_days = last_day  # 实际当月天数 #
     
-    date_prefix = f"{year}{month:02d}%"
+    date_prefix = f"{year}{month:02d}%" #
     cursor.execute('''
         SELECT project_path, SUM(duration)
         FROM time_records
         WHERE date LIKE ?
         GROUP BY project_path
-    ''', (date_prefix,))
-    records = cursor.fetchall()
+    ''', (date_prefix,)) #
+    records = cursor.fetchall() #
 
     if not records:
-        print(f"没有找到{year_month}的记录")
+        print(f"没有找到{year_month}的记录") #
         return
 
-    tree = defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)})
+    # Calculate overall total duration for the month first
+    month_total_duration_seconds = sum(item[1] for item in records)
+    
+    output = [f"\n[{year_month} 月统计]"] #
+
+    # Display total average time for the month first
+    if actual_days > 0:
+        month_total_avg_h = month_total_duration_seconds / actual_days / 3600 #
+        output.append(f"总时间: {time_format_duration(month_total_duration_seconds, actual_days)} ({month_total_avg_h:.2f}h/day)") #
+    else: # Should not happen if last_day is correctly calculated
+        output.append(f"总时间: {time_format_duration(month_total_duration_seconds, 1)}") #
+
+
+    tree = defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)}) #
     for project_path, duration in records:
         parts = project_path.split('_')
         if not parts:
             continue
         
-        top_level = 'STUDY' if parts[0].lower() == 'study' else parts[0].upper()
-        tree[top_level]['duration'] += duration
+        top_level = 'STUDY' if parts[0].lower() == 'study' else parts[0].upper() #
+        tree[top_level]['duration'] += duration 
         
         current = tree[top_level]
         for part in parts[1:]:
@@ -536,24 +556,13 @@ def query_month_summary(conn, year_month):
                 current['children'][part] = {'duration': 0, 'children': defaultdict(dict)}
             current['children'][part]['duration'] += duration
             current = current['children'][part]
-
-    output = [f"\n[{year_month} 月统计]"]
     
-    # 按总时长排序顶层项目
-    sorted_top_level = sorted(tree.items(), key=lambda x: x[1].get('duration', 0), reverse=True)
-    
-    total = 0
+    sorted_top_level = sorted(tree.items(), key=lambda x: x[1].get('duration', 0), reverse=True) 
     for top_level, subtree in sorted_top_level:
-        total_duration = subtree['duration']
-        total += total_duration
-        output.append(f"{top_level}: {time_format_duration(total_duration, actual_days)}")
-        # 使用统一的排序输出函数
+        total_duration_category = subtree['duration']
+        output.append(f"{top_level}: {time_format_duration(total_duration_category, actual_days)}")
         output.extend(generate_sorted_output(subtree, avg_days=actual_days, indent=1))
-    
-    # 显示总平均时间
-    total_avg = total/actual_days/3600 if actual_days >0 else 0
-    output.append(f"\n总时间: {time_format_duration(total)} ({total_avg:.2f}h)")
-    print('\n'.join(output))
+    print('\n'.join(output)) #
 def main():
     conn = init_db()
     
