@@ -74,10 +74,10 @@ class LogProcessor:
             return
 
         formatted_date_output_str = f"Date:{self.year_to_use}{formatted_month_str}{formatted_day_str}"
-        
+
         day_has_study_event = False
-        event_related_output_lines = [] 
-        
+        event_related_output_lines = []
+
         self._reset_date_block_processing_state()
 
         is_first_event_actual_getup_type = False
@@ -91,7 +91,7 @@ class LogProcessor:
                 if first_event_peek_original_text in ["醒", "起床"]:
                     is_first_event_actual_getup_type = True
                     first_event_true_formatted_time = self._format_time(first_event_peek_raw_time)
-        
+
         if is_first_event_actual_getup_type:
             event_related_output_lines.append(f"Getup:{first_event_true_formatted_time}")
             event_related_output_lines.append("Remark:")
@@ -105,7 +105,7 @@ class LogProcessor:
             consumed_event_original_text = event_lines_content[0][4:]
             self._last_interval_start_raw_time = consumed_event_raw_time
             self._was_previous_event_initial_raw_xing = (consumed_event_original_text == "醒")
-            
+
             consumed_display_text = self.TEXT_REPLACEMENT_MAP.get(consumed_event_original_text, consumed_event_original_text)
             if "study" in consumed_display_text:
                 day_has_study_event = True
@@ -120,32 +120,32 @@ class LogProcessor:
 
             if "study" in display_text:
                 day_has_study_event = True
-            
+
             if self._last_interval_start_raw_time is None: # Should only happen if the first event wasn't a "getup" type
                 event_related_output_lines.append(f"{current_formatted_time}{display_text}") # This assumes first non-getup event is a start point
                 self._last_interval_start_raw_time = raw_time
-                self._was_previous_event_initial_raw_xing = False 
-            else: 
+                self._was_previous_event_initial_raw_xing = False
+            else:
                 start_formatted_time = self._format_time(self._last_interval_start_raw_time)
                 event_related_output_lines.append(f"{start_formatted_time}~{current_formatted_time}{display_text}")
-                self._was_previous_event_initial_raw_xing = False 
+                self._was_previous_event_initial_raw_xing = False
                 self._last_interval_start_raw_time = raw_time
-        
+
         print(formatted_date_output_str)
         if day_has_study_event:
             print(f"{self.GREEN}Status:True{self.RESET}")
         else:
             print(f"{self.RED}Status:False{self.RESET}")
-        
+
         for out_line in event_related_output_lines:
             print(out_line)
 
     def process_log_data(self, log_data_str: str):
         lines = log_data_str.strip().split('\n')
-        
+
         current_date_raw_content = None
         current_event_lines_for_block = []
-        self._printed_at_least_one_block = False 
+        self._printed_at_least_one_block = False # Reset for each call to process_log_data
 
         for line_content in lines:
             line = line_content.strip()
@@ -154,38 +154,58 @@ class LogProcessor:
 
             # MODIFIED: Check for 4-digit date lines
             if line.isdigit() and len(line) == 4: # e.g., "0115" for Jan 15
-                if current_date_raw_content is not None: 
-                    if self._printed_at_least_one_block: 
-                        print() 
+                if current_date_raw_content is not None:
+                    if self._printed_at_least_one_block:
+                        print() # Add a blank line between processed date blocks
                     self._process_and_print_date_block(current_date_raw_content, current_event_lines_for_block)
                     self._printed_at_least_one_block = True
-                
+
                 current_date_raw_content = line
                 current_event_lines_for_block = []
-            else:  
+            else:
                 # This assumes event lines start with 4 digits for time
                 if len(line) >= 4 and line[:4].isdigit():
-                    current_event_lines_for_block.append(line)
+                    if current_date_raw_content is not None: # Only add event lines if a date block has started
+                        current_event_lines_for_block.append(line)
+                    else:
+                        print(f"警告: 发现事件行 '{line}' 但没有活动的日期块。此行将被忽略。", file=sys.stderr)
+
                 # Optional: else: print(f"Skipping unrecognized line format: {line}", file=sys.stderr)
 
 
         if current_date_raw_content is not None:
-            if self._printed_at_least_one_block:
+            if self._printed_at_least_one_block and current_event_lines_for_block: # Add blank line only if there were previous blocks AND new content
                 print()
             self._process_and_print_date_block(current_date_raw_content, current_event_lines_for_block)
 
-if __name__ == '__main__':
-    file_path = input("请输入txt文件名: ")
-    try:
-        with open(file_path, 'r', encoding='utf-8') as file:
-            input_data = file.read()
+def main():
+    """
+    Main function to run the log processor.
+    Prompts for a filename, reads the file, and processes its content.
+    Loops until 'q' is entered.
+    """
+    while True:
+        file_path_input = input("请输入txt文件名 (或输入 'q' 退出): ")
+        if file_path_input.lower() == 'q':
+            print("程序退出。")
+            break
         
-        # Example of using a specific year and replacement map
-        # processor = LogProcessor(year=2024, replacement_map_file="custom_map.json")
-        processor = LogProcessor() # Uses default year 2025 and "end2duration.json"
-        processor.process_log_data(input_data)
-
-    except FileNotFoundError:
-        print(f"错误: 文件 '{file_path}' 未找到。", file=sys.stderr)
-    except Exception as e:
-        print(f"处理文件时发生错误: {e}", file=sys.stderr)
+        if not file_path_input:
+            print("未输入文件名，请重新输入。", file=sys.stderr)
+            print("-" * 30) # Separator for next prompt
+            continue
+        try:
+            with open(file_path_input, 'r', encoding='utf-8') as file:
+                input_data = file.read()
+            processor = LogProcessor() # Uses default year 2025 and "end2duration.json"
+            print("-" * 30) 
+            processor.process_log_data(input_data)
+            print("-" * 30) 
+        except FileNotFoundError:
+            print(f"错误: 文件 '{file_path_input}' 未找到。", file=sys.stderr)
+            print("-" * 30) 
+        except Exception as e:
+            print(f"处理文件时发生错误: {e}", file=sys.stderr)
+            print("-" * 30) 
+if __name__ == '__main__':
+    main()
