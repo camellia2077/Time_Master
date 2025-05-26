@@ -5,10 +5,6 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 import calendar
 
-# Assuming parse_colors_config.py exists in the same directory or is in PYTHONPATH
-# from parse_colors_config import DEFAULT_COLOR_PALETTE, YELLOW
-
-# Placeholder for color constants if parse_colors_config is not available
 DEFAULT_COLOR_PALETTE = ['#ebedf0', '#c6e48b', '#7bc96f', '#239a3b', '#196127']
 YELLOW = '#fdd835'
 
@@ -91,7 +87,6 @@ class TimeTrackerDB:
     def insert_day_record_if_not_exists(self, date_val):
         cursor = self.get_cursor()
         cursor.execute('INSERT OR IGNORE INTO days (date) VALUES (?)', (date_val,))
-        # No commit here, will be handled by calling function or LogFileParser
 
     def update_day_details(self, date_val, status, remark, getup_time):
         cursor = self.get_cursor()
@@ -119,7 +114,7 @@ class TimeTrackerDB:
             else:
                 parent_proj = '_'.join(parts[:i])
                 cursor.execute("INSERT OR IGNORE INTO parent_child (child, parent) VALUES (?, ?)", (child_proj, parent_proj))
-    
+
     def get_top_level_parent_for_project(self, project_part_str):
         cursor = self.get_cursor()
         cursor.execute("SELECT parent FROM parent_child WHERE child = ?", (project_part_str,))
@@ -149,7 +144,7 @@ class TimeTrackerDB:
         cursor.execute('SELECT SUM(duration) as total_duration FROM time_records WHERE date = ?', (date_query,))
         row = cursor.fetchone()
         return row['total_duration'] if row and row['total_duration'] is not None else 0
-        
+
     def get_day_time_records(self, date_query):
         cursor = self.get_cursor()
         cursor.execute('SELECT project_path, duration FROM time_records WHERE date = ?', (date_query,))
@@ -197,36 +192,30 @@ class LogFileParser:
 
     @staticmethod
     def _time_to_seconds(t_str):
-        try:
-            if not t_str: return 0
-            h, m = map(int, t_str.split(':'))
-            return h * 3600 + m * 60
-        except ValueError:
-            return 0 # Or raise an error
+        # Assuming t_str is always valid "HH:MM" and not empty due to external validation
+        h, m = map(int, t_str.split(':'))
+        return h * 3600 + m * 60
 
     @staticmethod
     def _reset_day_info():
         return {'status': 'False', 'remark': '', 'getup_time': '00:00'}
 
     def _parse_time_log_line(self, line_content, filepath, line_num):
+        # Assuming line_content is always valid and matches the regex due to external validation
         match = re.match(r'^(\d{1,2}:\d{2})~(\d{1,2}:\d{2})\s*([a-zA-Z0-9_-]+)', line_content)
-        if not match:
-            print(f"格式错误在 {os.path.basename(filepath)} 第{line_num}行 (时间记录格式无效): {line_content}")
-            return None
-        
+        # If match is None here, it means external validation failed or regex is not robust for "valid" inputs.
+        # For this exercise, we assume match will not be None.
         start_str, end_str, project_path = match.groups()
-        project_path = project_path.lower().replace('stduy', 'study')
+        project_path = project_path.lower().replace('stduy', 'study') # Normalization
 
         start_sec = self._time_to_seconds(start_str)
         end_sec = self._time_to_seconds(end_str)
 
-        if end_sec < start_sec:
+        if end_sec < start_sec: # Handle overnight records
             end_sec += 86400
-        
+
         duration = end_sec - start_sec
-        if duration < 0:
-            print(f"警告: 计算得到的时长为负数在 {os.path.basename(filepath)} 第{line_num}行: {line_content}. 时长设为0.")
-            duration = 0
+        # Assuming duration will be non-negative due to valid inputs and correct overnight logic
         return start_str, end_str, project_path, duration
 
     def _commit_day_entries_to_db(self, current_date_val, day_info_val, time_records_list):
@@ -235,7 +224,7 @@ class LogFileParser:
         self.db_manager.update_day_details(current_date_val, day_info_val['status'], day_info_val['remark'], day_info_val['getup_time'])
         for start_r, end_r, project_path_r, duration_r in time_records_list:
             self.db_manager.insert_time_record(current_date_val, start_r, end_r, project_path_r, duration_r)
-            self.db_manager.update_project_hierarchy(project_path_r) # Uses db_manager's method
+            self.db_manager.update_project_hierarchy(project_path_r)
 
     def parse_file(self, filepath):
         current_date = None
@@ -265,18 +254,20 @@ class LogFileParser:
                         elif '~' in line_text:
                             if current_date:
                                 parsed_entry = self._parse_time_log_line(line_text, filepath, line_num)
-                                if parsed_entry: time_records.append(parsed_entry)
+                                time_records.append(parsed_entry)
                     except Exception as e_line:
-                        print(f"处理行时发生错误在 {os.path.basename(filepath)} 第{line_num}行: '{line_text}'. 错误: {e_line}")
+                        # Silently skip the problematic line if an unexpected error occurs during its processing
+                        # This assumes external validation should have caught format issues.
+                        # print(f"Error processing line {line_num} in {os.path.basename(filepath)}: '{line_text}'. Error: {e_line}. Skipping.")
                         continue
             if current_date:
                 self._commit_day_entries_to_db(current_date, day_info, time_records)
             self.db_manager.commit()
         except FileNotFoundError:
-            print(f"错误: 文件未找到 '{filepath}'")
+            print(f"错误: 文件未找到 '{filepath}'") # This is a system error, not input text validation
             self.db_manager.rollback()
         except Exception as e_file:
-            print(f"解析文件 '{filepath}' 时发生严重错误: {e_file}")
+            print(f"解析文件 '{filepath}' 时发生严重错误: {e_file}") # General file processing error
             self.db_manager.rollback()
 
 
@@ -288,18 +279,20 @@ class ReportFormatter:
 
     @staticmethod
     def _format_duration(seconds, avg_days=1):
-        if not isinstance(seconds, (int, float)) or not isinstance(avg_days, (int, float)):
-            return "Invalid input"
-        if seconds < 0: seconds = 0
+        # Assuming 'seconds' and 'avg_days' are of correct types from internal calls
+        if not isinstance(seconds, (int, float)): seconds = 0 # Basic safeguard
+        if not isinstance(avg_days, (int, float)) or avg_days <= 0 : avg_days = 1 # Basic safeguard
+
+        if seconds < 0: seconds = 0 # Safeguard for display logic
 
         total_hours = int(seconds // 3600)
         total_minutes = int((seconds % 3600) // 60)
-        
+
         time_str = f"{total_hours}h{total_minutes:02d}m"
         if total_hours == 0 and total_minutes == 0:
             time_str = "<1m" if seconds > 0 else "0m"
 
-        if avg_days > 0 and avg_days != 1:
+        if avg_days > 0 and avg_days != 1: # Check avg_days again in case it was reset to 1
             avg_seconds_per_day = seconds / avg_days
             avg_hours = int(avg_seconds_per_day // 3600)
             avg_minutes = int((avg_seconds_per_day % 3600) // 60)
@@ -311,7 +304,7 @@ class ReportFormatter:
         lines = []
         children_items = node.get('children', {})
         if not isinstance(children_items, dict): children_items = {}
-        
+
         children = sorted(children_items.items(), key=lambda x: x[1].get('duration', 0), reverse=True)
 
         for key, value in children:
@@ -374,7 +367,7 @@ class ReportFormatter:
 
         output_lines = [f"\n[最近{days_to_query}天统计] {start_date_str_q} - {end_date_str_q}"]
         status_data = self.db_manager.get_period_status_summary(start_date_str_q, end_date_str_q)
-        
+
         true_count = status_data['true_count'] if status_data else 0
         false_count = status_data['false_count'] if status_data else 0
         total_recorded_days = status_data['total_recorded_days'] if status_data else 0
@@ -408,33 +401,31 @@ class ReportFormatter:
     def print_raw_day_report(self, date_query_raw):
         day_data = self.db_manager.get_day_info(date_query_raw)
         if not day_data:
-            print(f"日期 {date_query_raw} 无记录")
+            print(f"日期 {date_query_raw} 无记录") # Check if data exists, not input format
             return
 
         output = [f"Date:{date_query_raw}", f"Status:{day_data['status']}", f"Getup:{day_data['getup_time']}"]
         output.append(f"Remark:{day_data['remark'] if day_data['remark'] and day_data['remark'].strip() else ''}")
-        
+
         records = self.db_manager.get_raw_day_records(date_query_raw)
         for rec in records:
             output.append(f"{rec['start']}~{rec['end']} {rec['project_path']}")
         print('\n'.join(output))
 
     def print_month_report(self, year_month_str_q):
-        if not re.match(r'^\d{6}$', year_month_str_q):
-            print("月份格式错误,应为YYYYMM")
-            return
-
+        # Assuming year_month_str_q is valid "YYYYMM" due to external validation
         year_val, month_val = int(year_month_str_q[:4]), int(year_month_str_q[4:6])
         try:
             _, last_day = calendar.monthrange(year_val, month_val)
-        except calendar.IllegalMonthError:
-            print(f"无效的月份: {month_val}"); return
-        
+        except calendar.IllegalMonthError: # This is for invalid month numbers like 13
+            print(f"无效的月份数值: {month_val}") # Keep for truly invalid date logic
+            return
+
         actual_days = last_day
         date_prefix = f"{year_val}{month_val:02d}%"
-        
+
         grand_total_duration = self.db_manager.get_monthly_total_duration(date_prefix)
-        records = self.db_manager.get_monthly_aggregated_records(date_prefix) # These are already sum(duration) by project_path
+        records = self.db_manager.get_monthly_aggregated_records(date_prefix)
 
         output = [f"\n[{year_val}年{month_val}月 统计 ({actual_days}天)]"]
         output.append(f"总时间: {self._format_duration(grand_total_duration, actual_days)}")
@@ -443,17 +434,16 @@ class ReportFormatter:
             output.append("本月无有效时间记录")
             print('\n'.join(output))
             return
-        
-        # Build tree from aggregated records (project_path, monthly_duration)
+
         tree = defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)})
-        for record in records: # record is like {'project_path': 'study_math', 'monthly_duration': 3600}
+        for record in records:
             project_path, duration_sum = record['project_path'], record['monthly_duration']
             parts = project_path.split('_')
             if not parts: continue
 
             top_level_key = self.db_manager.get_top_level_parent_for_project(parts[0])
             current_node = tree[top_level_key]
-            current_node['duration'] += duration_sum 
+            current_node['duration'] += duration_sum
 
             temp_node_for_subparts = current_node
             for part in parts[1:]:
@@ -463,7 +453,7 @@ class ReportFormatter:
                     temp_node_for_subparts['children'][part] = {'duration': 0, 'children': defaultdict(dict)}
                 temp_node_for_subparts['children'][part]['duration'] += duration_sum
                 temp_node_for_subparts = temp_node_for_subparts['children'][part]
-        
+
         sorted_top_level = sorted(tree.items(), key=lambda x: x[1].get('duration', 0), reverse=True)
         for top_level, subtree in sorted_top_level:
             cat_total = subtree['duration']
@@ -490,24 +480,13 @@ class HeatmapVisualizer:
         return YELLOW
 
     def generate_yearly_heatmap(self, year, output_file):
-        study_times = self.db_manager.get_study_times_for_year(year) # Fetches {date_str: duration}
+        # Assuming 'year' is a valid integer year due to external validation
+        study_times = self.db_manager.get_study_times_for_year(year)
 
         start_date = datetime(year, 1, 1)
         end_date = datetime(year, 12, 31)
-        first_weekday = start_date.weekday() # Monday is 0 and Sunday is 6
-        # GitHub starts week on Sunday. If Monday=0, Sunday=6. (6 - first_weekday_mon_0) % 7 if not Sun.
-        # If Sunday is 0 (Python default for strftime %w), then (0 - first_weekday_sun_0) % 7 doesn't make sense for front_empty
-        # Let's use Python's weekday() where Mon=0..Sun=6. GitHub display starts Sunday.
-        # So, number of empty days at start of first week = first_weekday if Sunday is 0, or (first_weekday + 1) % 7 if Sunday is considered 0.
-        # If the year starts on Monday (0), we need 1 empty day (Sunday).
-        # If year starts on Sunday (6), we need 0 empty days.
-        # So, (first_weekday_python + 1) % 7 gives num empty days before the first day if week starts Sunday.
-        # Or, simpler, if Sunday is cell 0: empty_days = (start_date.isoweekday() % 7)
-        # ISO weekday: Mon=1..Sun=7. So, start_date.isoweekday() % 7 gives 0 for Sun, 1 for Mon, etc.
-        # This is the number of cells to skip to get to the first day of the month on a Sunday-start week.
-
-        front_empty_days = (start_date.isoweekday()) % 7 # 0 for Sunday, 1 for Monday, ..., 6 for Saturday
-                                                        # This means if year starts on Mon, 1 empty cell (Sun)
+        
+        front_empty_days = (start_date.isoweekday()) % 7
 
         heatmap_data = []
         for _ in range(front_empty_days):
@@ -527,25 +506,24 @@ class HeatmapVisualizer:
             heatmap_data.append((None, 'empty', 0))
 
         cell_size, spacing, weeks, rows = 12, 3, (len(heatmap_data) // 7) , 7
-        margin_top, margin_left = 20, 35 # Increased left margin for day names
-        width = margin_left + weeks * (cell_size + spacing) - spacing # No trailing space
+        margin_top, margin_left = 20, 35
+        width = margin_left + weeks * (cell_size + spacing) - spacing
         height = margin_top + rows * (cell_size + spacing) - spacing
 
         svg = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">']
-        days_of_week_labels = ["", "Mon", "", "Wed", "", "Fri", ""] # GitHub style: M, W, F
+        days_of_week_labels = ["", "Mon", "", "Wed", "", "Fri", ""]
         
         for i, day_label in enumerate(days_of_week_labels):
-            if day_label: # Only print M, W, F
-                 y_pos = margin_top + i * (cell_size + spacing) + cell_size * 0.7 # Adjusted for baseline
-                 svg.append(f'<text x="{margin_left-10}" y="{y_pos}" font-size="9" text-anchor="end" alignment-baseline="middle">{day_label}</text>')
+            if day_label:
+                y_pos = margin_top + i * (cell_size + spacing) + cell_size * 0.7
+                svg.append(f'<text x="{margin_left-10}" y="{y_pos}" font-size="9" text-anchor="end" alignment-baseline="middle">{day_label}</text>')
         
         month_markers = {}
         for i, (date_obj, _, _) in enumerate(heatmap_data):
             if date_obj:
                 week_idx = i // 7
                 month_num = date_obj.month
-                if date_obj.day == 1 and month_num not in month_markers : # Simplified: mark first day of month's column
-                     # check if this column already has a marker or if previous column was different month
+                if date_obj.day == 1 and month_num not in month_markers :
                     if not any(m_col == week_idx for m_col in month_markers.values()):
                         month_markers[month_num] = week_idx
         
@@ -554,12 +532,12 @@ class HeatmapVisualizer:
             svg.append(f'<text x="{x_pos}" y="{margin_top - 8}" font-size="10" text-anchor="start">{calendar.month_abbr[month_num]}</text>')
 
         for i, (date_val, color_val, study_duration_val) in enumerate(heatmap_data):
-            if date_val is not None: # Skip 'empty' placeholders for drawing rects
+            if date_val is not None:
                 week_index = i // 7
-                day_index = i % 7 # 0=Sunday, 1=Monday.. for the grid
+                day_index = i % 7
                 x_pos = margin_left + week_index * (cell_size + spacing)
                 y_pos = margin_top + day_index * (cell_size + spacing)
-                duration_str = ReportFormatter._format_duration(study_duration_val) # Use static method
+                duration_str = ReportFormatter._format_duration(study_duration_val)
                 title_text = f"{date_val.strftime('%Y-%m-%d')}: {duration_str}"
                 svg.append(f'<rect width="{cell_size}" height="{cell_size}" x="{x_pos}" y="{y_pos}" fill="{color_val}" rx="2" ry="2">')
                 svg.append(f'    <title>{title_text}</title>')
@@ -598,9 +576,11 @@ class TimeTrackingApp:
             choice = input("请选择操作 (0-8)：").strip()
 
             if choice == '0':
-                input_path = input("请输入单个 .txt 文件路径或包含 .txt 文件的目录路径：").strip('"')
+                input_path = input("请输入单个文件路径或包含文件的目录路径：").strip('"')
                 input_path = os.path.normpath(input_path)
-                if os.path.isfile(input_path) and input_path.lower().endswith('.txt'):
+                # Assuming input_path is valid and exists, and is either a file or a directory
+                # The differentiation is for processing strategy, not validation of the path itself.
+                if os.path.isfile(input_path):
                     print(f"\n处理文件: {input_path}")
                     self.parser.parse_file(input_path)
                     print("文件处理完成。")
@@ -609,45 +589,46 @@ class TimeTrackingApp:
                     file_count = 0
                     for root, _, files in os.walk(input_path):
                         for filename in files:
-                            if filename.lower().endswith('.txt'):
-                                filepath = os.path.join(root, filename)
-                                print(f"  处理文件: {filepath}")
-                                self.parser.parse_file(filepath)
-                                file_count += 1
-                    print(f"目录扫描完成，共处理 {file_count} 个数据文件。")
+                            # Process all files in the directory, assuming they are relevant
+                            filepath = os.path.join(root, filename)
+                            print(f"  处理文件: {filepath}")
+                            self.parser.parse_file(filepath)
+                            file_count += 1
+                    print(f"目录扫描完成，共处理 {file_count} 个文件。")
                 else:
-                    print(f"错误：路径 '{input_path}' 不是有效的 .txt 文件或目录。")
+                    # This case implies the path was not a file or directory recognized by os.path methods.
+                    # If external validation guarantees it's one or the other, this path might not be hit.
+                    # Or, it could be a special file type not handled. For now, do nothing.
+                    print(f"注意：路径 '{input_path}' 未被识别为常规文件或目录进行处理。")
             elif choice == '1':
                 date_str = input("请输入日期 (格式 YYYYMMDD): ")
-                if re.match(r'^\d{8}$', date_str): self.reporter.print_day_report(date_str)
-                else: print("日期格式错误。")
+                # Assuming date_str is always in YYYYMMDD format due to external validation
+                self.reporter.print_day_report(date_str)
             elif choice in ('2', '3', '4'):
                 days_map = {'2': 7, '3': 14, '4': 30}
                 self.reporter.print_period_report(days_map[choice])
             elif choice == '5':
                 date_str = input("请输入日期 (格式 YYYYMMDD): ")
-                if re.match(r'^\d{8}$', date_str): self.reporter.print_raw_day_report(date_str)
-                else: print("日期格式错误。")
+                # Assuming date_str is always in YYYYMMDD format
+                self.reporter.print_raw_day_report(date_str)
             elif choice == '6':
                 year_str = input("请输入年份 (格式 YYYY): ")
-                if re.match(r'^\d{4}$', year_str):
-                    output_filename = f"heatmap_study_{year_str}.html"
-                    try:
-                        self.visualizer.generate_yearly_heatmap(int(year_str), output_filename)
-                        print(f"学习热力图已生成：{os.path.abspath(output_filename)}")
-                    except Exception as e: print(f"生成热力图失败: {e}")
-                else: print("年份格式错误。")
+                # Assuming year_str is always in YYYY format
+                output_filename = f"heatmap_study_{year_str}.html"
+                try:
+                    self.visualizer.generate_yearly_heatmap(int(year_str), output_filename)
+                    print(f"学习热力图已生成：{os.path.abspath(output_filename)}")
+                except Exception as e: print(f"生成热力图失败: {e}")
             elif choice == '7':
                 year_month_str = input("请输入年月 (格式 YYYYMM): ")
-                if re.match(r'^\d{6}$', year_month_str): self.reporter.print_month_report(year_month_str)
-                else: print("年月格式错误。")
+                # Assuming year_month_str is always in YYYYMM format
+                self.reporter.print_month_report(year_month_str)
             elif choice == '8':
                 print("正在退出程序...")
                 break
             else:
-                print("无效选项。")
+                print("无效选项。") 
         self.db_manager.close()
-
 if __name__ == '__main__':
     app = TimeTrackingApp()
     app.run()
