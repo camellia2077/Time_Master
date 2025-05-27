@@ -3,7 +3,7 @@ import datetime # Retained as per original
 import json
 import os
 import time
-import argparse # Added for command-line arguments
+import argparse # Added for command-line argument parsing
 
 class LogProcessor:
     GREEN = "\033[92m"
@@ -22,19 +22,17 @@ class LogProcessor:
     def _output(self, message: str):
         if self.output_file_stream:
             plain_message = (message.replace(self.GREEN, "")
-                             .replace(self.RED, "")
-                             .replace(self.YELLOW, "")
-                             .replace(self.RESET, ""))
+                                  .replace(self.RED, "")
+                                  .replace(self.YELLOW, "")
+                                  .replace(self.RESET, ""))
             self.output_file_stream.write(plain_message + "\n")
         else:
-            # This path would only be taken if LogProcessor is instantiated elsewhere without an output_file_stream
-            # or if called directly for console messages when output_file_stream is not yet open (e.g. error messages)
-            print(message)
-
+            # This path would only be taken if LogProcessor is instantiated elsewhere 
+            # without an output_file_stream. In the context of main(), a stream is always provided.
+            print(message) 
 
     def _load_replacement_map(self, file_path: str) -> dict:
         if not os.path.exists(file_path):
-            # Keep using print to stderr for this specific warning, as it's about a config file
             print(f"警告: 文本替换映射文件 '{file_path}' 未找到。将使用空的替换映射。", file=sys.stderr)
             return {}
         try:
@@ -69,9 +67,6 @@ class LogProcessor:
                 month_int = int(month_chars)
                 day_int = int(day_chars)
                 if not (1 <= month_int <= 12 and 1 <= day_int <= 31):
-                    # Use self._output for consistency if an output file is intended for warnings too,
-                    # otherwise print to stderr is fine for operational warnings.
-                    # Sticking to print to stderr for these warnings as they are about data integrity.
                     print(f"警告: 无效的日期部分 '{date_line_content}'. 跳过此日期块。", file=sys.stderr)
                     return
                 formatted_month_str = f"{month_int:02d}"
@@ -103,7 +98,8 @@ class LogProcessor:
             event_related_output_lines.append(f"Getup:{first_event_true_formatted_time}")
             event_related_output_lines.append("Remark:")
         else:
-            event_related_output_lines.append(f"Getup:{self.YELLOW}null{self.RESET}")
+            # Output "null" without ANSI colors for file output
+            event_related_output_lines.append(f"Getup:null") 
             event_related_output_lines.append("Remark:")
 
         start_processing_from_index = 0
@@ -137,9 +133,12 @@ class LogProcessor:
 
         self._output(formatted_date_output_str)
         if day_has_study_event:
-            self._output(f"{self.GREEN}Status:True{self.RESET}")
+            # Output "Status:True" without ANSI colors for file output
+            self._output(f"Status:True")
         else:
-            self._output(f"{self.RED}Status:False{self.RESET}")
+            # Output "Status:False" without ANSI colors for file output
+            self._output(f"Status:False")
+
 
         for out_line in event_related_output_lines:
             self._output(out_line)
@@ -156,86 +155,83 @@ class LogProcessor:
                 continue
             if line.isdigit() and len(line) == 4: # Potential date line
                 if current_date_raw_content is not None: # Process previous block
-                    if self._printed_at_least_one_block:
-                        self._output("") # Add a blank line between date blocks
+                    if self._printed_at_least_one_block: # Add blank line if not first block
+                        self._output("")
                     self._process_and_print_date_block(current_date_raw_content, current_event_lines_for_block)
                     self._printed_at_least_one_block = True
                 current_date_raw_content = line
                 current_event_lines_for_block = []
-            # Check if it's an event line (starts with 4 digits)
-            elif len(line) >= 4 and line[:4].isdigit():
-                if current_date_raw_content is not None:
-                    current_event_lines_for_block.append(line)
-                else:
-                    # Log warning to console (stderr) as this is an operational issue
-                    print(f"警告: 发现事件行 '{line}' 但没有活动的日期块。此行将被忽略。", file=sys.stderr)
-            # If the line is not a date and not a valid event line for the current block,
-            # it could be a remark or other text that is not processed by this logic.
-            # Depending on strictness, one might add a warning here too.
-            # For now, such lines are implicitly ignored if they don't fit the event criteria.
+            else: # Potential event line
+                if len(line) >= 4 and line[:4].isdigit(): # Check if it looks like an event line "HHMM..."
+                    if current_date_raw_content is not None:
+                        current_event_lines_for_block.append(line)
+                    else:
+                        print(f"警告: 发现事件行 '{line}' 但没有活动的日期块。此行将被忽略。", file=sys.stderr)
+                # else:
+                    # Optional: Handle lines that are neither date nor valid event format if needed
+                    # print(f"信息: 忽略格式不符的行: '{line}'", file=sys.stderr)
 
-        # Process the last block if any data exists
+
+        # Process the last block if it exists
         if current_date_raw_content is not None:
-            if self._printed_at_least_one_block and (current_event_lines_for_block or not self._printed_at_least_one_block): # Ensure blank line if needed
-                 # Add a blank line only if there were previous blocks and current block has events or is the first block
-                if current_event_lines_for_block and self._printed_at_least_one_block :
-                    self._output("")
+            if self._printed_at_least_one_block and (current_event_lines_for_block or not self._printed_at_least_one_block): 
+                if current_event_lines_for_block or self._printed_at_least_one_block : 
+                    if self._printed_at_least_one_block : 
+                        self._output("")
             self._process_and_print_date_block(current_date_raw_content, current_event_lines_for_block)
+
 
 def main():
     parser = argparse.ArgumentParser(description="Process log files and output formatted duration data.")
-    parser.add_argument("input_file", help="Path to the input TXT log file.")
-    # Optional: Add argument for config file if you want to make it configurable via CLI
-    # parser.add_argument("-c", "--config", default="duration_config.json", help="Path to the JSON replacement map file.")
-    # Optional: Add argument for year if you want to make it configurable via CLI
-    # parser.add_argument("-y", "--year", type=int, default=2025, help="Year to use for dates.")
-
+    parser.add_argument("filepath", help="Path to the input txt file.")
+    parser.add_argument("-o", "--output", help="Path to the output file. If not specified, output is saved to 'Duration_<input_file_stem>.txt'.")
+    parser.add_argument("--year", type=int, default=2025, help="Year to use for date formatting (default: 2025).")
+    parser.add_argument("--config", default="duration_config.json", help="Path to the text replacement map JSON file (default: duration_config.json).")
 
     args = parser.parse_args()
-    file_path_input = args.input_file
-    # config_file_path = args.config # if using the optional argument
-    # year_to_use = args.year # if using the optional argument
 
+    file_path_input = args.filepath
+    user_specified_output_file = args.output # Will be None if -o is not used
+    year_to_use = args.year
+    config_file_path = args.config
+    
     output_file_stream = None
     actual_output_filename = ""
-    try:
-        # Check if input file exists before trying to open it
-        if not os.path.exists(file_path_input):
-            print(f"错误: 输入文件 '{file_path_input}' 未找到。", file=sys.stderr)
-            # No need for a separator here, as the program will exit or not proceed further.
-            return # Exit if input file not found
 
+    try:
         with open(file_path_input, 'r', encoding='utf-8') as file:
             input_data = file.read()
-
-        base_input_filename = os.path.basename(file_path_input)
-        actual_output_filename = f"Duration_{base_input_filename}"
-
-        print(f"输出将保存到文件: {actual_output_filename}")
-
+        
+        if user_specified_output_file:
+            actual_output_filename = user_specified_output_file
+            print(f"Output will be saved to user-specified file: {actual_output_filename}")
+        else:
+            # Generate default filename based on input filename
+            base_input_filename = os.path.basename(file_path_input)
+            input_filename_stem, _ = os.path.splitext(base_input_filename)
+            actual_output_filename = f"Duration_{input_filename_stem}.txt"
+            print(f"Output will be saved to default file: {actual_output_filename}")
+        
         output_file_stream = open(actual_output_filename, 'w', encoding='utf-8')
-
-        # processor = LogProcessor(year=year_to_use, replacement_map_file=config_file_path, output_file_stream=output_file_stream)
-        processor = LogProcessor(output_file_stream=output_file_stream) # Using default year and config file name
-
+            
+        processor = LogProcessor(year=year_to_use, replacement_map_file=config_file_path, output_file_stream=output_file_stream)
+        
         start_time = time.perf_counter()
         processor.process_log_data(input_data)
         end_time = time.perf_counter()
-
+        
         processing_duration = end_time - start_time
 
-        # This message will go to console via print
-        print(f"处理完成。输出已保存到: {actual_output_filename}")
-        print(f"处理输入内容花费时间: {processing_duration:.6f} 秒")
-
-    except FileNotFoundError: # Should be caught by the os.path.exists check now, but good to keep as a safeguard
+        print(f"Processing complete. Output has been saved to: {actual_output_filename}")
+        print(f"Processing input content took: {processing_duration:.6f} seconds")
+            
+    except FileNotFoundError:
         print(f"错误: 输入文件 '{file_path_input}' 未找到。", file=sys.stderr)
     except Exception as e:
         print(f"处理文件时发生错误: {e}", file=sys.stderr)
     finally:
         if output_file_stream:
             output_file_stream.close()
-        # No separator here as the script finishes execution after one file.
 
 if __name__ == '__main__':
     main()
