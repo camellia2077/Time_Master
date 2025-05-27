@@ -10,7 +10,7 @@ class LogProcessor:
     YELLOW = "\033[93m"
     RESET = "\033[0m"
 
-    def __init__(self, year: int = 2025, replacement_map_file: str = "end2duration.json", output_file_stream=None):
+    def __init__(self, year: int = 2025, replacement_map_file: str = "duration_config.json", output_file_stream=None):
         self.year_to_use = year
         self._last_interval_start_raw_time = None
         self._was_previous_event_initial_raw_xing = False
