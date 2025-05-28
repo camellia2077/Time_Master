@@ -13,7 +13,7 @@ class Colors:
     RESET = '\033[0m'   # ANSI转义码：重置颜色，恢复到默认终端颜色
 
 # 定义配置文件的路径常量
-CONFIG_FILE_PATH = "check_input_config.json"
+CONFIG_FILE_PATH = "activity_validator_config.json"
 
 # 定义配置管理类，负责加载和管理程序的配置信息
 class ConfigManager:
