@@ -230,7 +230,8 @@ def main():
     parser = argparse.ArgumentParser(description="Process log files and output formatted duration data.")
     parser.add_argument("filepath", help="Path to the input txt file.")
     parser.add_argument("-o", "--output", help="Path to the output file. If not specified, output is saved to 'Duration_<input_file_stem>.txt'.")
-    parser.add_argument("--year", type=int, default=2025, help="Year to use for date formatting (default: 2025).")
+    current_year = datetime.datetime.now().year# 获取当前年份作为 --year 参数的默认值
+    parser.add_argument("--year", type=int, default=current_year, help=f"Year to use for date formatting (default: {current_year}).")
     parser.add_argument("--config", default="duration_config.json", help="Path to the text replacement map JSON file (default: duration_config.json).")
 
     args = parser.parse_args()
