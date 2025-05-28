@@ -1,9 +1,9 @@
 import sys
-import datetime # Retained as per original
+import datetime
 import json
 import os
 import time
-import argparse # Added for command-line argument parsing
+import argparse 
 
 class LogProcessor:
     GREEN = "\033[92m"
