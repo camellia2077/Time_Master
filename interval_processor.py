@@ -11,11 +11,11 @@ class LogProcessor:
     YELLOW = "\033[93m"
     RESET = "\033[0m"
 
-    def __init__(self, year: int = 2025, replacement_map_file: str = "duration_config.json", output_file_stream=None):
+    def __init__(self, year: int = 2025, replacement_map_file: str = "interval_processor.json", output_file_stream=None):
         self.year_to_use = year
-        self._last_interval_start_raw_time = None
-        self._was_previous_event_initial_raw_xing = False
-        self._printed_at_least_one_block = False
+        self._last_interval_start_raw_time = None # Internal state for current day block processing
+        self._was_previous_event_initial_raw_xing = False # Internal state for current day block processing
+        self._printed_at_least_one_block = False # Overall state for process_log_data method
         self.TEXT_REPLACEMENT_MAP = self._load_replacement_map(replacement_map_file)
         self.output_file_stream = output_file_stream
 
@@ -56,10 +56,12 @@ class LogProcessor:
         return time_str
 
     def _reset_date_block_processing_state(self):
+        # Resets state specific to a single date block's internal event processing
         self._last_interval_start_raw_time = None
         self._was_previous_event_initial_raw_xing = False
 
-    def _process_and_print_date_block(self, date_line_content: str, event_lines_content: list):
+    # Modified to accept next_day_initial_wakeup_raw_time
+    def _process_and_print_date_block(self, date_line_content: str, event_lines_content: list, next_day_initial_wakeup_raw_time: str = None):
         if len(date_line_content) == 4 and date_line_content.isdigit():
             month_chars = date_line_content[0:2]
             day_chars = date_line_content[2:4]
@@ -81,7 +83,9 @@ class LogProcessor:
         formatted_date_output_str = f"Date:{self.year_to_use}{formatted_month_str}{formatted_day_str}"
         day_has_study_event = False
         event_related_output_lines = []
-        self._reset_date_block_processing_state()
+        
+        self._reset_date_block_processing_state() # Resets self._last_interval_start_raw_time for this block
+
         is_first_event_actual_getup_type = False
         first_event_true_formatted_time = None
 
@@ -98,7 +102,6 @@ class LogProcessor:
             event_related_output_lines.append(f"Getup:{first_event_true_formatted_time}")
             event_related_output_lines.append("Remark:")
         else:
-            # Output "null" without ANSI colors for file output
             event_related_output_lines.append(f"Getup:null") 
             event_related_output_lines.append("Remark:")
 
@@ -106,8 +109,9 @@ class LogProcessor:
         if is_first_event_actual_getup_type:
             consumed_event_raw_time = event_lines_content[0][:4]
             consumed_event_original_text = event_lines_content[0][4:]
-            self._last_interval_start_raw_time = consumed_event_raw_time
+            self._last_interval_start_raw_time = consumed_event_raw_time 
             self._was_previous_event_initial_raw_xing = (consumed_event_original_text == "醒")
+            
             consumed_display_text = self.TEXT_REPLACEMENT_MAP.get(consumed_event_original_text, consumed_event_original_text)
             if "study" in consumed_display_text:
                 day_has_study_event = True
@@ -121,64 +125,105 @@ class LogProcessor:
             display_text = self.TEXT_REPLACEMENT_MAP.get(original_text, original_text)
             if "study" in display_text:
                 day_has_study_event = True
+            
             if self._last_interval_start_raw_time is None:
                 event_related_output_lines.append(f"{current_formatted_time}{display_text}")
                 self._last_interval_start_raw_time = raw_time
-                self._was_previous_event_initial_raw_xing = False
+                self._was_previous_event_initial_raw_xing = False 
             else:
                 start_formatted_time = self._format_time(self._last_interval_start_raw_time)
                 event_related_output_lines.append(f"{start_formatted_time}~{current_formatted_time}{display_text}")
                 self._was_previous_event_initial_raw_xing = False
                 self._last_interval_start_raw_time = raw_time
 
+        # Add sleep_night entry if applicable
+        if next_day_initial_wakeup_raw_time and self._last_interval_start_raw_time:
+            last_event_time_current_day_formatted = self._format_time(self._last_interval_start_raw_time)
+            next_day_wakeup_time_formatted = self._format_time(next_day_initial_wakeup_raw_time)
+            event_related_output_lines.append(f"{last_event_time_current_day_formatted}~{next_day_wakeup_time_formatted}sleep_night")
+
         self._output(formatted_date_output_str)
         if day_has_study_event:
-            # Output "Status:True" without ANSI colors for file output
             self._output(f"Status:True")
         else:
-            # Output "Status:False" without ANSI colors for file output
             self._output(f"Status:False")
-
 
         for out_line in event_related_output_lines:
             self._output(out_line)
 
     def process_log_data(self, log_data_str: str):
         lines = log_data_str.strip().split('\n')
-        current_date_raw_content = None
-        current_event_lines_for_block = []
-        self._printed_at_least_one_block = False
+        
+        all_blocks = []
+        current_date_raw_content_temp = None
+        current_event_lines_for_block_temp = []
 
         for line_content in lines:
             line = line_content.strip()
             if not line:
                 continue
-            if line.isdigit() and len(line) == 4: # Potential date line
-                if current_date_raw_content is not None: # Process previous block
-                    if self._printed_at_least_one_block: # Add blank line if not first block
-                        self._output("")
-                    self._process_and_print_date_block(current_date_raw_content, current_event_lines_for_block)
-                    self._printed_at_least_one_block = True
-                current_date_raw_content = line
-                current_event_lines_for_block = []
-            else: # Potential event line
-                if len(line) >= 4 and line[:4].isdigit(): # Check if it looks like an event line "HHMM..."
-                    if current_date_raw_content is not None:
-                        current_event_lines_for_block.append(line)
-                    else:
-                        print(f"警告: 发现事件行 '{line}' 但没有活动的日期块。此行将被忽略。", file=sys.stderr)
-                # else:
-                    # Optional: Handle lines that are neither date nor valid event format if needed
-                    # print(f"信息: 忽略格式不符的行: '{line}'", file=sys.stderr)
+            
+            # A line is a date if it's exactly 4 digits.
+            is_date_line = line.isdigit() and len(line) == 4
+            # An event line starts with 4 digits but isn't *just* 4 digits (to distinguish from date lines if context is lost)
+            # However, the structure implies date lines are processed first, then subsequent lines are events for that date.
+            # The original logic for else branch after date check implies this:
+            is_event_line = False
+            if not is_date_line and len(line) >= 4 and line[:4].isdigit():
+                 is_event_line = True
 
 
-        # Process the last block if it exists
-        if current_date_raw_content is not None:
-            if self._printed_at_least_one_block and (current_event_lines_for_block or not self._printed_at_least_one_block): 
-                if current_event_lines_for_block or self._printed_at_least_one_block : 
-                    if self._printed_at_least_one_block : 
-                        self._output("")
-            self._process_and_print_date_block(current_date_raw_content, current_event_lines_for_block)
+            if is_date_line:
+                if current_date_raw_content_temp is not None: 
+                    all_blocks.append({
+                        'date': current_date_raw_content_temp,
+                        'events': list(current_event_lines_for_block_temp) 
+                    })
+                current_date_raw_content_temp = line
+                current_event_lines_for_block_temp = []
+            elif is_event_line:
+                if current_date_raw_content_temp is not None:
+                    current_event_lines_for_block_temp.append(line)
+                else:
+                    print(f"警告: 发现事件行 '{line}' 但没有活动的日期块。此行将被忽略。", file=sys.stderr)
+            # else:
+                # print(f"信息: 忽略格式不符的行: '{line}'", file=sys.stderr)
+
+
+        # Process the last accumulated block
+        if current_date_raw_content_temp is not None:
+            all_blocks.append({
+                'date': current_date_raw_content_temp,
+                'events': list(current_event_lines_for_block_temp)
+            })
+
+        self._printed_at_least_one_block = False # Reset for the printing loop below
+
+        num_blocks = len(all_blocks)
+        for i, block_data in enumerate(all_blocks):
+            current_date_raw_content = block_data['date']
+            current_event_lines_for_block = block_data['events']
+            next_day_initial_wakeup_raw_time = None
+
+            if i + 1 < num_blocks: # If there is a next day block
+                next_day_event_lines = all_blocks[i+1]['events']
+                for event_line_str in next_day_event_lines:
+                    if len(event_line_str) >= 4 and event_line_str[:4].isdigit():
+                        raw_time_next = event_line_str[:4]
+                        text_next = event_line_str[4:]
+                        if text_next in ["醒", "起床"]:
+                            next_day_initial_wakeup_raw_time = raw_time_next
+                            break 
+            
+            if self._printed_at_least_one_block:
+                self._output("") 
+            
+            self._process_and_print_date_block(
+                current_date_raw_content,
+                current_event_lines_for_block,
+                next_day_initial_wakeup_raw_time 
+            )
+            self._printed_at_least_one_block = True
 
 
 def main():
@@ -191,7 +236,7 @@ def main():
     args = parser.parse_args()
 
     file_path_input = args.filepath
-    user_specified_output_file = args.output # Will be None if -o is not used
+    user_specified_output_file = args.output 
     year_to_use = args.year
     config_file_path = args.config
     
@@ -206,7 +251,6 @@ def main():
             actual_output_filename = user_specified_output_file
             print(f"Output will be saved to user-specified file: {actual_output_filename}")
         else:
-            # Generate default filename based on input filename
             base_input_filename = os.path.basename(file_path_input)
             input_filename_stem, _ = os.path.splitext(base_input_filename)
             actual_output_filename = f"Duration_{input_filename_stem}.txt"
