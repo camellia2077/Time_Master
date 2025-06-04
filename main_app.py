@@ -1,10 +1,12 @@
 import os
 import re
-import database_manager as db # database_manager.py is in the same directory
-import heatmap_generator as hg # heatmap_generator.py is in the same directory
+import data_parser as dp # For parsing and db initialization
+import database_querier as dq # For querying
+import heatmap_generator as hg # For generating heatmap
 
 def main():
-    conn = db.init_db()
+    # Initialize DB connection using the parser module
+    conn = dp.init_db()
 
     while True:
         print("\n--- Time Tracking Menu ---")
@@ -25,7 +27,7 @@ def main():
 
             if os.path.isfile(input_path) and input_path.lower().endswith('.txt'):
                 print(f"\nProcessing single file: {input_path}")
-                db.parse_file(conn, input_path)
+                dp.parse_file(conn, input_path) # Use data_parser
                 print(f"File processing complete for {input_path}")
             elif os.path.isdir(input_path):
                 print(f"\nScanning directory: {input_path}")
@@ -35,7 +37,7 @@ def main():
                         if filename.lower().endswith('.txt'):
                             filepath = os.path.join(root, filename)
                             print(f"Found data file: {filepath}")
-                            db.parse_file(conn, filepath)
+                            dp.parse_file(conn, filepath) # Use data_parser
                             file_count += 1
                 if file_count > 0:
                     print(f"Directory scanning complete. Processed {file_count} data file(s).")
@@ -47,18 +49,18 @@ def main():
         elif choice == '1':
             date_str = input("Enter date (YYYYMMDD): ")
             if re.match(r'^\d{8}$', date_str):
-                db.query_day(conn, date_str)
+                dq.query_day(conn, date_str) # Use database_querier
             else:
                 print("Invalid date format. Please use YYYYMMDD.")
 
         elif choice in ('2', '3', '4'):
             days_map = {'2': 7, '3': 14, '4': 30}
-            db.query_period(conn, days_map[choice])
+            dq.query_period(conn, days_map[choice]) # Use database_querier
 
         elif choice == '5':
             date_str = input("Enter date (YYYYMMDD): ")
             if re.match(r'^\d{8}$', date_str):
-                db.query_day_raw(conn, date_str)
+                dq.query_day_raw(conn, date_str) # Use database_querier
             else:
                 print("Invalid date format. Please use YYYYMMDD.")
 
@@ -67,6 +69,11 @@ def main():
             if re.match(r'^\d{4}$', year_str):
                 year = int(year_str)
                 output_file = f"study_heatmap_{year}.html"
+                # Assuming heatmap_generator.py has get_study_times or uses the one from dq
+                # The original heatmap_generator.py needs access to get_study_times
+                # For this example, we'll call dq.get_study_times if hg needs it externally
+                # Or, hg.generate_heatmap directly uses the connection to get data.
+                # The provided hg.generate_heatmap(conn, year, output_file) implies it handles data fetching.
                 hg.generate_heatmap(conn, year, output_file)
                 print(f"Study heatmap generated: {output_file}")
             else:
@@ -75,7 +82,7 @@ def main():
         elif choice == '7':
             year_month_str = input("Enter year and month (YYYYMM): ")
             if re.match(r'^\d{6}$', year_month_str):
-                db.query_month_summary(conn, year_month_str)
+                dq.query_month_summary(conn, year_month_str) # Use database_querier
             else:
                 print("Invalid year-month format. Please use YYYYMM.")
 
