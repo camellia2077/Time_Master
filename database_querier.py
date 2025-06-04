@@ -74,19 +74,21 @@ def query_day(conn, date):
         return
 
     status, remark, getup = day_data
-    output = [f"\nDate: {date}", f"Status: {status}", f"Getup: {getup}"]
+    
+    # Calculate and prepare total duration string first
+    cursor.execute('SELECT SUM(duration) FROM time_records WHERE date = ?', (date,))
+    total_duration_result = cursor.fetchone()
+    total_duration = total_duration_result[0] if total_duration_result and total_duration_result[0] is not None else 0
+    
+    output = [f"\nDate: {date}"]
+    output.append(f"Total Time: {time_format_duration(total_duration)} ({total_duration // 60} minutes)") # Total for the day
+    output.append(f"Status: {status}")
+    output.append(f"Getup: {getup}")
     if remark and remark.strip():
         output.append(f"Remark: {remark}")
 
     cursor.execute('SELECT project_path, duration FROM time_records WHERE date = ?', (date,))
     records = cursor.fetchall()
-
-    cursor.execute('SELECT SUM(duration) FROM time_records WHERE date = ?', (date,))
-    total_duration_result = cursor.fetchone()
-    total_duration = total_duration_result[0] if total_duration_result and total_duration_result[0] is not None else 0
-    
-    total_minutes = total_duration // 60
-    output.append(f"Total: {time_format_duration(total_duration)} ({total_minutes} minutes)")
 
     if records:
         # Build the project tree
@@ -96,33 +98,27 @@ def query_day(conn, date):
         cursor.execute("SELECT child, parent FROM parent_child")
         parent_map = {child: parent_val for child, parent_val in cursor.fetchall()}
 
-        for project_path, duration in records:
+        for project_path, duration_val in records: # Renamed duration to duration_val to avoid conflict
             parts = project_path.split('_')
             if not parts: continue
 
-            # Determine the top-level category based on parent_map or defaults
             current_level_path = parts[0]
             top_level_category = parent_map.get(current_level_path, current_level_path.upper())
 
-            # Ensure top-level category exists in tree
             if top_level_category not in tree:
                 tree[top_level_category] = {'duration': 0, 'children': defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)})}
-            tree[top_level_category]['duration'] += duration
+            tree[top_level_category]['duration'] += duration_val
             
             current_node = tree[top_level_category]
-            # Process sub-categories
-            for i in range(len(parts)): # Iterate through parts to build hierarchy under top_level_category
-                part_name = parts[i]
-                # For the first part, its contribution is to the top_level_category's duration
-                # For subsequent parts, they form the children structure
-                if i > 0 : # if it's a sub-part like study_ml, ml is child of study.
+            for i in range(len(parts)): 
+                if i > 0 : 
                     child_name = parts[i]
                     if child_name not in current_node['children']:
                          current_node['children'][child_name] = {'duration': 0, 'children': defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)})}
-                    current_node['children'][child_name]['duration'] += duration
+                    current_node['children'][child_name]['duration'] += duration_val
                     current_node = current_node['children'][child_name]
-                elif len(parts) == 1 : # if project_path is just 'study', it has no children from path
-                    pass # Duration already added to top_level_category
+                elif len(parts) == 1 : 
+                    pass 
 
         sorted_top_level = sorted(tree.items(), key=lambda x: x[1]['duration'], reverse=True)
         for top_level, subtree_data in sorted_top_level:
@@ -144,6 +140,28 @@ def query_period(conn, days_to_query):
     end_date_str = end_date_dt.strftime("%Y%m%d")
     start_date_str = start_date_dt.strftime("%Y%m%d")
 
+    print(f"\n[Last {days_to_query} Days Statistics] ({start_date_str} - {end_date_str})")
+
+    # Fetch all records for the period to calculate total duration first
+    cursor.execute('SELECT project_path, duration FROM time_records WHERE date BETWEEN ? AND ?',
+                   (start_date_str, end_date_str))
+    records = cursor.fetchall()
+
+    # Get number of days with actual time records for accurate averaging
+    cursor.execute('''
+        SELECT COUNT(DISTINCT date)
+        FROM time_records
+        WHERE date BETWEEN ? AND ?
+    ''', (start_date_str, end_date_str))
+    actual_days_with_time_records = cursor.fetchone()[0] or 0
+    
+    overall_total_duration_seconds = sum(item[1] for item in records)
+    # Use actual_days_with_time_records for averaging, default to 1 to avoid division by zero
+    avg_days_for_calc = actual_days_with_time_records if actual_days_with_time_records > 0 else 1
+    
+    print(f"Overall Total Time: {time_format_duration(overall_total_duration_seconds, avg_days_for_calc)}")
+    print(f"Days with time records: {actual_days_with_time_records} day(s)")
+
     # Get status counts
     cursor.execute('''
         SELECT
@@ -156,23 +174,11 @@ def query_period(conn, days_to_query):
     true_count = status_data[0] if status_data and status_data[0] is not None else 0
     false_count = status_data[1] if status_data and status_data[1] is not None else 0
 
-    # Get number of days with actual time records for accurate averaging
-    cursor.execute('''
-        SELECT COUNT(DISTINCT date)
-        FROM time_records
-        WHERE date BETWEEN ? AND ?
-    ''', (start_date_str, end_date_str))
-    actual_days_with_time_records = cursor.fetchone()[0] or 0
-    
-    print(f"\n[Last {days_to_query} Days Statistics] ({start_date_str} - {end_date_str})")
-    print(f"Days with time records: {actual_days_with_time_records} day(s)")
-
     if actual_days_with_time_records > 0:
         print("Status Distribution (for days with records):")
         print(f"  True: {true_count} day(s) ({(true_count / actual_days_with_time_records * 100):.1f}%)")
         print(f"  False: {false_count} day(s) ({(false_count / actual_days_with_time_records * 100):.1f}%)")
     else:
-        # If no time records, show raw counts if available, or indicate no data
         recorded_status_days = true_count + false_count
         if recorded_status_days > 0:
             print("Status Distribution (overall days with status entries):")
@@ -182,19 +188,9 @@ def query_period(conn, days_to_query):
             print("Status Distribution: No status information available for this period.")
 
 
-    cursor.execute('SELECT project_path, duration FROM time_records WHERE date BETWEEN ? AND ?',
-                   (start_date_str, end_date_str))
-    records = cursor.fetchall()
-
     if not records:
         print("\nNo time records found for this period.")
         return
-
-    overall_total_duration_seconds = sum(item[1] for item in records)
-    # Use actual_days_with_time_records for averaging, default to 1 to avoid division by zero
-    avg_days_for_calc = actual_days_with_time_records if actual_days_with_time_records > 0 else 1
-
-    print(f"\nOverall Total Time: {time_format_duration(overall_total_duration_seconds, avg_days_for_calc)}")
 
     # Build project tree
     tree = defaultdict(lambda: {'duration': 0, 'children': defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)})})
@@ -246,6 +242,18 @@ def query_day_raw(conn, date):
         return
 
     db_date, status, getup, remark = day_data
+    
+    # Get total duration for the day
+    cursor.execute('SELECT SUM(duration) FROM time_records WHERE date = ?', (date,))
+    total_duration_result = cursor.fetchone()
+    total_duration_day = total_duration_result[0] if total_duration_result and total_duration_result[0] is not None else 0
+
+    output = [f"Date:{db_date}"]
+    output.append(f"Total Time:{time_format_duration(total_duration_day)}") # Added total time here
+    output.append(f"Status:{status}")
+    output.append(f"Getup:{getup}")
+    output.append(f"Remark:{remark if remark and remark.strip() else ''}")
+
     cursor.execute('''
         SELECT start, end, project_path
         FROM time_records
@@ -254,11 +262,8 @@ def query_day_raw(conn, date):
     ''', (date,))
     records = cursor.fetchall()
 
-    output = [f"Date:{db_date}", f"Status:{status}", f"Getup:{getup}"]
-    output.append(f"Remark:{remark if remark and remark.strip() else ''}")
-
     for start, end, project in records:
-        output.append(f"{start}~{end} {project}") # Added space before project
+        output.append(f"{start}~{end} {project}") 
 
     print('\n'.join(output))
 
@@ -275,12 +280,22 @@ def query_month_summary(conn, year_month):
     month = int(year_month[4:6])
     
     try:
-        num_days_in_month = calendar.monthrange(year, month)[1]
+        # num_days_in_month = calendar.monthrange(year, month)[1] # Not directly used for avg calc anymore
+        pass
     except calendar.IllegalMonthError:
         print(f"Invalid month: {month}")
         return
         
     date_prefix = f"{year}{month:02d}%" # For LIKE query
+
+    # Fetch all records for the month to calculate total duration first
+    cursor.execute('''
+        SELECT project_path, SUM(duration) as total_duration_for_project
+        FROM time_records
+        WHERE date LIKE ?
+        GROUP BY project_path
+    ''', (date_prefix,))
+    records_grouped = cursor.fetchall() # These are project_path, sum(duration) for that project
 
     # Get number of days with actual time records for accurate averaging
     cursor.execute('''
@@ -291,29 +306,34 @@ def query_month_summary(conn, year_month):
     actual_days_with_time_records = cursor.fetchone()[0] or 0
     
     avg_days_for_calc = actual_days_with_time_records if actual_days_with_time_records > 0 else 1
+    
+    # Calculate overall total duration for the month from the grouped records
+    month_total_duration_seconds = sum(item[1] for item in records_grouped)
 
-    cursor.execute('''
-        SELECT project_path, SUM(duration)
-        FROM time_records
-        WHERE date LIKE ?
-        GROUP BY project_path
-    ''', (date_prefix,))
-    records = cursor.fetchall()
-
-    if not records:
-        print(f"No records found for {year_month}.")
-        return
-
-    month_total_duration_seconds = sum(item[1] for item in records)
     output = [f"\n[{year_month} Monthly Statistics ({actual_days_with_time_records} day(s) with records)]"]
     output.append(f"Overall Total Time: {time_format_duration(month_total_duration_seconds, avg_days_for_calc)}")
+
+
+    if not records_grouped: # Check if any records were found
+        print('\n'.join(output)) # Print header and total time (which will be 0m)
+        print(f"No records found for {year_month}.")
+        return
 
     # Build project tree
     tree = defaultdict(lambda: {'duration': 0, 'children': defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)})})
     cursor.execute("SELECT child, parent FROM parent_child")
     parent_map = {child: parent_val for child, parent_val in cursor.fetchall()}
 
-    for project_path, duration in records:
+    # Re-fetch individual records for tree building if needed, or use records_grouped if structure is appropriate
+    # The current tree building logic expects (project_path, duration) for each entry,
+    # not (project_path, sum_duration_for_project).
+    # So we need to fetch the individual records again, or adapt the tree building.
+    # For simplicity and consistency with other functions, let's use the full records for tree building logic.
+    # However, the prompt's original code already iterated `records` which was `GROUP BY project_path`.
+    # This implies the tree building logic was intended to work with summed durations per project_path for the month.
+    # Let's stick to the original logic for tree building using the grouped records.
+
+    for project_path, duration in records_grouped: # project_path here is unique for the month
         parts = project_path.split('_')
         if not parts: continue
 
@@ -322,21 +342,48 @@ def query_month_summary(conn, year_month):
 
         if top_level_category not in tree:
             tree[top_level_category] = {'duration': 0, 'children': defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)})}
-        tree[top_level_category]['duration'] += duration
+        
+        # Since duration is already SUM(duration) for this project_path for the entire month,
+        # we add it to the top-level and potentially to one child if path is compound.
+        # The original logic seems to sum durations again, which might be incorrect if `records`
+        # already contains summed durations.
+        # Correct approach for monthly summary based on `GROUP BY project_path`:
+        
+        # Add total duration for this project_path to the top-level category
+        tree[top_level_category]['duration'] += duration 
         
         current_node = tree[top_level_category]
-        for i in range(len(parts)):
-            if i > 0:
+        # If project_path is compound (e.g., study_ml), add this duration to the sub-category as well.
+        # The duration is for the *entire* project_path, not just the part.
+        
+        # The original loop structure for parts was designed for individual time entries.
+        # For monthly summary with pre-grouped project_paths, the logic needs adjustment
+        # if we want to build a fine-grained tree from individual records.
+        # However, the current structure of query_month_summary's tree building iterates through `parts`
+        # as if building a hierarchy from a single `project_path` string that represents the entire month's
+        # activity for that specific path. This means if `project_path` is `study_ml`, `study` gets the duration,
+        # and then `ml` (as a child of `study`) also gets that same duration. This is how it was.
+        # To make it more accurate for a summary view:
+        # The duration for 'study_ml' should contribute to 'study' (top-level) and then 'ml' (child).
+        # The current code correctly adds to `tree[top_level_category]['duration']`.
+        # Then, for sub-parts:
+        
+        temp_node_for_path_traversal = tree[top_level_category]
+        if len(parts) > 1: # Only if there are sub-parts like 'study_ml'
+            for i in range(1, len(parts)): # Start from the first sub-part
                 child_name = parts[i]
-                if child_name not in current_node['children']:
-                     current_node['children'][child_name] = {'duration': 0, 'children': defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)})}
-                current_node['children'][child_name]['duration'] += duration
-                current_node = current_node['children'][child_name]
-            elif len(parts) == 1:
-                pass
-                
+                if child_name not in temp_node_for_path_traversal['children']:
+                    temp_node_for_path_traversal['children'][child_name] = {'duration': 0, 'children': defaultdict(lambda: {'duration': 0, 'children': defaultdict(dict)})}
+                # The duration here is the total for project_path for the month
+                temp_node_for_path_traversal['children'][child_name]['duration'] += duration 
+                temp_node_for_path_traversal = temp_node_for_path_traversal['children'][child_name]
+
+
     sorted_top_level = sorted(tree.items(), key=lambda x: x[1]['duration'], reverse=True)
     for top_level, subtree_data in sorted_top_level:
-        output_lines = [f"\n{top_level}: {time_format_duration(subtree_data['duration'], avg_days_for_calc)}"]
-        output_lines.extend(generate_sorted_output(subtree_data, avg_days=avg_days_for_calc, indent=1))
-        print('\n'.join(output_lines))
+        output_lines_detail = [f"\n{top_level}: {time_format_duration(subtree_data['duration'], avg_days_for_calc)}"]
+        # Pass the correct subtree_data to generate_sorted_output
+        output_lines_detail.extend(generate_sorted_output(subtree_data, avg_days=avg_days_for_calc, indent=1))
+        output.append('\n'.join(output_lines_detail)) # Append to the main output list
+    
+    print('\n'.join(output))
