@@ -179,6 +179,29 @@ class FileDataParser:
 
         self.time_records.append((start, end, project_path, duration))
 
+    def _process_line(self, line_text, filepath, line_num):
+        """Processes a single line from the input file by dispatching to the appropriate handler."""
+        try:
+            stripped_line = line_text.strip()
+            if not stripped_line:
+                return # Skip empty lines
+
+            if stripped_line.startswith('Date:'):
+                self._handle_date_line(stripped_line[5:].strip())
+            elif stripped_line.startswith('Status:'):
+                self._handle_status_line(stripped_line[7:].strip())
+            elif stripped_line.startswith('Remark:'):
+                self._handle_remark_line(stripped_line[7:].strip())
+            elif stripped_line.startswith('Getup:'):
+                self._handle_getup_line(stripped_line[6:].strip())
+            elif '~' in stripped_line:
+                self._handle_time_record_line(stripped_line, filepath, line_num)
+            # else: unknown line format, could be logged or ignored
+        except Exception as e:
+            # Log error for the specific line but allow processing of subsequent lines to continue.
+            print(f"Error parsing line {line_num} in {os.path.basename(filepath)}: '{stripped_line}'")
+            print(f"Specific error: {str(e)}")
+
     def process_file_contents(self, filepath):
         """Parses a single input text file and stores data in the database."""
         # Reset instance variables for a new file, ensuring parser is clean if reused.
@@ -188,26 +211,7 @@ class FileDataParser:
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 for line_num, line_text in enumerate(f, 1):
-                    try:
-                        stripped_line = line_text.strip()
-                        if not stripped_line:
-                            continue
-
-                        if stripped_line.startswith('Date:'):
-                            self._handle_date_line(stripped_line[5:].strip())
-                        elif stripped_line.startswith('Status:'):
-                            self._handle_status_line(stripped_line[7:].strip())
-                        elif stripped_line.startswith('Remark:'):
-                            self._handle_remark_line(stripped_line[7:].strip())
-                        elif stripped_line.startswith('Getup:'):
-                            self._handle_getup_line(stripped_line[6:].strip())
-                        elif '~' in stripped_line:
-                            self._handle_time_record_line(stripped_line, filepath, line_num)
-                        # else: unknown line format, could be logged or ignored
-                    except Exception as e:
-                        print(f"Error parsing line {line_num} in {os.path.basename(filepath)}: '{stripped_line}'")
-                        print(f"Specific error: {str(e)}")
-                        continue # Skip to next line
+                    self._process_line(line_text, filepath, line_num)
 
             # After processing all lines, store data for the last date encountered in the file.
             if self.current_date:
@@ -220,7 +224,7 @@ class FileDataParser:
         except Exception as e:
             print(f"An unexpected error occurred while processing {filepath}: {str(e)}")
             # Depending on transaction strategy, a rollback might be considered here for database consistency.
-            # However, commits are generally happening after logical blocks (date data or full file).
+            # Commits generally happen after logical blocks (date data or full file).
 
 # The parse_file function now uses the FileDataParser class.
 # Its public interface remains the same, so main_app.py does not need to change its call.
