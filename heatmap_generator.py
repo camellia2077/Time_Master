@@ -1,6 +1,38 @@
 from datetime import datetime, timedelta
 from parse_colors_config import DEFAULT_COLOR_PALETTE, YELLOW
-from database_manager import get_study_times, time_format_duration # Ensure database_manager.py is in the same directory or in PYTHONPATH
+
+def time_format_duration(seconds, avg_days=1):
+    """Formats duration in seconds to a string (e.g., XhYYm) and optionally an average."""
+    if seconds is None:
+        seconds = 0
+    
+    # Calculate total duration
+    total_hours = int(seconds // 3600)
+    total_minutes = int((seconds % 3600) // 60)
+    time_str = f"{total_hours}h{total_minutes:02d}m" if total_hours > 0 else f"{total_minutes}m"
+
+    # If avg_days > 1, calculate and format average duration
+    if avg_days > 1:
+        avg_seconds_per_day = seconds / avg_days
+        avg_hours = int(avg_seconds_per_day // 3600)
+        avg_minutes = int((avg_seconds_per_day % 3600) // 60)
+        avg_str = f"{avg_hours}h{avg_minutes:02d}m"
+        return f"{time_str} ({avg_str}/day)"
+    else:
+        return time_str
+def get_study_times(conn, year):
+    cursor = conn.cursor()
+    start_date = f"{year}0101"
+    end_date = f"{year}1231"
+    cursor.execute('''
+        SELECT date, SUM(duration)
+        FROM time_records
+        WHERE date BETWEEN ? AND ?
+        AND (project_path = 'study' OR project_path LIKE 'study_%')
+        GROUP BY date
+    ''', (start_date, end_date))
+    study_times = dict(cursor.fetchall())
+    return study_times
 
 def return_color(study_time):
     hours = study_time / 3600
