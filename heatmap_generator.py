@@ -11,7 +11,8 @@ RED_BLOOD_LIGHT = ['#fff5f0', '#fee0d2', '#fc9272', '#de2d26', '#a50f15']
 LAVA_RED_LIGHT = ['#ffebee', '#ffcdd2', '#ef9a9a', '#e57373', '#ef5350']
 
 DEFAULT_COLOR_PALETTE = GITHUB_GREEN_LIGHT
-YELLOW = '#ffff07'
+GOLD = "#fbff24"
+ORANGE = "#f97148"
 class HeatmapGenerator:
     """
     Generates an HTML/SVG study heatmap for a given year based on time tracking data.
@@ -84,7 +85,7 @@ class HeatmapGenerator:
         elif hours < 12:
             return DEFAULT_COLOR_PALETTE[4]
         else:
-            return YELLOW
+            return ORANGE
 
     def _prepare_heatmap_layout_data(self):
         """
