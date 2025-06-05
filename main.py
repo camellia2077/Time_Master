@@ -1,6 +1,7 @@
 # main.py
 import os
 import re
+import time
 import data_parser as dp
 import database_importer as di # Import the new database importer
 import database_querier as dq
@@ -24,7 +25,7 @@ def handle_menu_choice(choice, conn):
     if choice == '0':
         input_path = input("Enter the path to a .txt file or a directory: ").strip().strip('"')
         input_path = os.path.normpath(input_path)
-
+        start_time = time.time()
         # The core logic is now a two-step process: Parse, then Import.
         def process_and_import(filepath):
             print(f"Parsing file: {filepath}")
@@ -58,7 +59,9 @@ def handle_menu_choice(choice, conn):
                 print(f"No .txt files found or successfully processed in {input_path}")
         else:
             print(f"Error: Invalid path. Please provide a valid .txt file or directory: {input_path}")
-
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        print(f"Time taken for processing: {elapsed_time:.2f} seconds")
     elif choice == '1': 
         date_str = input("Enter date (YYYYMMDD): ")
         if re.match(r'^\d{8}$', date_str): 
