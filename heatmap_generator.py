@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from parse_colors_config import DEFAULT_COLOR_PALETTE, YELLOW # Assuming this file exists and is correct
+from heatmap_colors_config import DEFAULT_COLOR_PALETTE, YELLOW # Assuming this file exists and is correct
 
 class HeatmapGenerator:
     """
