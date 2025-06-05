@@ -1,168 +1,241 @@
 from datetime import datetime, timedelta
-from parse_colors_config import DEFAULT_COLOR_PALETTE, YELLOW
+from parse_colors_config import DEFAULT_COLOR_PALETTE, YELLOW # Assuming this file exists and is correct
 
-def time_format_duration(seconds, avg_days=1):
-    """Formats duration in seconds to a string (e.g., XhYYm) and optionally an average."""
-    if seconds is None:
-        seconds = 0
-    
-    # Calculate total duration
-    total_hours = int(seconds // 3600)
-    total_minutes = int((seconds % 3600) // 60)
-    time_str = f"{total_hours}h{total_minutes:02d}m" if total_hours > 0 else f"{total_minutes}m"
+class HeatmapGenerator:
+    """
+    Generates an HTML/SVG study heatmap for a given year based on time tracking data.
+    """
 
-    # If avg_days > 1, calculate and format average duration
-    if avg_days > 1:
-        avg_seconds_per_day = seconds / avg_days
-        avg_hours = int(avg_seconds_per_day // 3600)
-        avg_minutes = int((avg_seconds_per_day % 3600) // 60)
-        avg_str = f"{avg_hours}h{avg_minutes:02d}m"
-        return f"{time_str} ({avg_str}/day)"
-    else:
-        return time_str
-def get_study_times(conn, year):
-    cursor = conn.cursor()
-    start_date = f"{year}0101"
-    end_date = f"{year}1231"
-    cursor.execute('''
-        SELECT date, SUM(duration)
-        FROM time_records
-        WHERE date BETWEEN ? AND ?
-        AND (project_path = 'study' OR project_path LIKE 'study_%')
-        GROUP BY date
-    ''', (start_date, end_date))
-    study_times = dict(cursor.fetchall())
-    return study_times
+    def __init__(self, conn, year):
+        """
+        Initializes the HeatmapGenerator.
 
-def return_color(study_time):
-    hours = study_time / 3600
-    if hours == 0:
-        return DEFAULT_COLOR_PALETTE[0]
-    elif hours < 4:
-        return DEFAULT_COLOR_PALETTE[1]
-    elif hours < 8:
-        return DEFAULT_COLOR_PALETTE[2]
-    elif hours < 10:
-        return DEFAULT_COLOR_PALETTE[3]
-    elif hours < 12:
-        return DEFAULT_COLOR_PALETTE[4]
-    else:
-        return YELLOW
+        Args:
+            conn (sqlite3.Connection): The database connection object.
+            year (int): The year for which to generate the heatmap.
+        """
+        self.conn = conn
+        self.year = year
+        self.study_times = self._fetch_study_times()
+        self.heatmap_data = []  # List of (date_obj, color, study_time_seconds)
+        self.svg_params = {}    # Stores calculated SVG parameters
 
-def generate_heatmap(conn, year, output_file):
-    study_times = get_study_times(conn, year) # Fetched via database_manager
-
-    start_date = datetime(year, 1, 1)
-    end_date = datetime(year, 12, 31)
-
-    first_weekday = start_date.weekday()  # 0=周一, ..., 6=周日
-    # GitHub heatmap typically starts on Sunday. weekday() is 0 for Mon, 6 for Sun.
-    # If year starts on Monday (0), need 1 empty day.
-    # If year starts on Sunday (6), need 0 empty days.
-    # Correct logic for front_empty_days: (start_date.weekday() + 1) % 7
-    # The original logic was for a week starting Monday, then adjusting.
-    # Let's use GitHub's typical Sunday start:
-    # Sunday = 0, Monday = 1, ..., Saturday = 6 for this calculation
-    # Python's weekday(): Monday = 0, ..., Sunday = 6
-    # We want the first column to be Sunday.
-    # Number of blank days before the first day of the year:
-    front_empty_days = (start_date.isoweekday() % 7) # ISO: Mon=1..Sun=7. So Sun=0 for us.
-
-    total_days = (end_date - start_date).days + 1
-    total_slots = front_empty_days + total_days
-    back_empty_days = (7 - (total_slots % 7)) % 7
-
-    heatmap_data = []
-    for _ in range(front_empty_days):
-        heatmap_data.append((None, 'empty', 0))
-
-    current_date = start_date
-    while current_date <= end_date:
-        date_str = current_date.strftime("%Y%m%d")
-        study_time = study_times.get(date_str, 0)
-        color = return_color(study_time)
-        heatmap_data.append((current_date, color, study_time))
-        current_date += timedelta(days=1)
-
-    for _ in range(back_empty_days):
-        heatmap_data.append((None, 'empty', 0))
-
-    cell_size = 12
-    spacing = 3
-    # weeks = (front_empty_days + total_days + back_empty_days) // 7 # Max 53 weeks
-    weeks = len(heatmap_data) // 7
-    rows = 7
-
-    margin_top = 30 # Increased for month labels
-    margin_left = 35 # For day labels
-    width = margin_left + weeks * (cell_size + spacing) - spacing # No trailing spacing for width
-    height = margin_top + rows * (cell_size + spacing) - spacing # No trailing spacing for height
-
-    svg = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" style="font-family: Arial, sans-serif;">']
-
-    # Add day labels (Sun, Mon, ..., Sat) - GitHub shows Mon, Wed, Fri
-    # days_of_week = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-    day_labels_display = {1: 'Mon', 3: 'Wed', 5: 'Fri'} # Display only for Mon, Wed, Fri
-    for i in range(rows): # 0=Sun, 1=Mon...
-        if i in day_labels_display:
-            # y = margin_top + i * (cell_size + spacing) + cell_size / 2 # Centered
-            y = margin_top + i * (cell_size + spacing) + cell_size - 2 # Align with top of cells better
-            svg.append(f'<text x="0" y="{y}" font-size="10px" fill="#767676" alignment-baseline="middle">{day_labels_display[i]}</text>')
-
-
-    # Add month labels
-    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-    last_month_drawn = -1
-    for week_idx in range(weeks):
-        # Get the date corresponding to the first day (Sunday) of this week column
-        # The first actual date in heatmap_data might be after front_empty_days
-        first_day_of_week_idx_in_data = week_idx * 7 + front_empty_days
-        # Find the first actual date in this column
-        actual_date_in_col = None
-        for i in range(7):
-            idx = week_idx * 7 + i
-            if idx < len(heatmap_data) and heatmap_data[idx][0] is not None:
-                actual_date_in_col = heatmap_data[idx][0]
-                break
+    @staticmethod
+    def _time_format_duration(seconds, avg_days=1):
+        """
+        Formats duration in seconds to a string (e.g., XhYYm) and optionally an average.
+        """
+        if seconds is None:
+            seconds = 0
         
-        if actual_date_in_col:
-            month_idx = actual_date_in_col.month -1 # 0-11
-            # Draw month label if it's the first time we see this month in a new column
-            # or if it's the first column and it's a new month.
-            if month_idx != last_month_drawn:
-                 # Only draw if it's a new month AND it's roughly the start of the month in this column
-                if actual_date_in_col.day < 8 or week_idx == 0 : # Heuristic to place month label
-                    x_pos = margin_left + week_idx * (cell_size + spacing)
-                    svg.append(f'<text x="{x_pos}" y="{margin_top - 10}" font-size="10px" fill="#767676">{month_names[month_idx]}</text>')
-                    last_month_drawn = month_idx
+        total_hours = int(seconds // 3600)
+        total_minutes = int((seconds % 3600) // 60)
+        time_str = f"{total_hours}h{total_minutes:02d}m" if total_hours > 0 else f"{total_minutes}m"
 
+        if avg_days > 1:
+            avg_seconds_per_day = seconds / avg_days
+            avg_hours = int(avg_seconds_per_day // 3600)
+            avg_minutes = int((avg_seconds_per_day % 3600) // 60)
+            avg_str = f"{avg_hours}h{avg_minutes:02d}m"
+            return f"{time_str} ({avg_str}/day)"
+        else:
+            return time_str
 
-    # Add data cells (squares)
-    for i, (date_obj, color, study_time) in enumerate(heatmap_data):
-        col_idx = i // 7  # Week index
-        row_idx = i % 7   # Day index (0=Sunday, ..., 6=Saturday)
+    def _fetch_study_times(self):
+        """
+        Fetches daily total study times for the given year from the database.
+        """
+        cursor = self.conn.cursor()
+        start_date_str = f"{self.year}0101"
+        end_date_str = f"{self.year}1231"
+        cursor.execute('''
+            SELECT date, SUM(duration)
+            FROM time_records
+            WHERE date BETWEEN ? AND ?
+            AND (project_path = 'study' OR project_path LIKE 'study_%')
+            GROUP BY date
+        ''', (start_date_str, end_date_str))
+        return dict(cursor.fetchall())
 
-        x = margin_left + col_idx * (cell_size + spacing)
-        y = margin_top + row_idx * (cell_size + spacing)
+    def _get_color_for_study_time(self, study_time_seconds):
+        """
+        Determines the heatmap cell color based on study duration.
+        """
+        hours = study_time_seconds / 3600
+        if hours == 0:
+            return DEFAULT_COLOR_PALETTE[0]
+        elif hours < 4:
+            return DEFAULT_COLOR_PALETTE[1]
+        elif hours < 8:
+            return DEFAULT_COLOR_PALETTE[2]
+        elif hours < 10:
+            return DEFAULT_COLOR_PALETTE[3]
+        elif hours < 12:
+            return DEFAULT_COLOR_PALETTE[4]
+        else:
+            return YELLOW
 
-        if date_obj is not None:
-            duration_str = time_format_duration(study_time) # Formatted via database_manager
-            title_text = f"{date_obj.strftime('%Y-%m-%d')}: {duration_str}"
-            svg.append(f'  <rect width="{cell_size}" height="{cell_size}" x="{x}" y="{y}" fill="{color}" rx="2" ry="2">')
-            svg.append(f'    <title>{title_text}</title>')
-            svg.append(f'  </rect>')
-        # else: # Optional: draw empty cells differently if needed
-            # svg.append(f'<rect width="{cell_size}" height="{cell_size}" x="{x}" y="{y}" fill="#ebedf0" rx="2" ry="2" opacity="0.5"/>')
+    def _prepare_heatmap_layout_data(self):
+        """
+        Calculates date-related layout parameters (e.g., empty days at start/end)
+        and populates self.heatmap_data with tuples of (date_obj, color, study_time_seconds).
+        """
+        start_date_obj = datetime(self.year, 1, 1)
+        end_date_obj = datetime(self.year, 12, 31)
+        
+        self.svg_params['start_date_obj'] = start_date_obj
+        self.svg_params['end_date_obj'] = end_date_obj
 
+        # Sunday = 0, Monday = 1, ..., Saturday = 6 for column calculation
+        # Python's isoweekday(): Mon=1..Sun=7. So (isoweekday % 7) gives Sun=0, Mon=1..Sat=6
+        front_empty_days = start_date_obj.isoweekday() % 7
+        self.svg_params['front_empty_days'] = front_empty_days
 
-    svg.append('</svg>')
+        total_days_in_year = (end_date_obj - start_date_obj).days + 1
+        
+        total_slots = front_empty_days + total_days_in_year
+        back_empty_days = (7 - (total_slots % 7)) % 7
+        
+        self.heatmap_data = []
+        for _ in range(front_empty_days):
+            self.heatmap_data.append((None, 'empty', 0)) # placeholder for empty cell
 
-    html = f"""
+        current_date = start_date_obj
+        while current_date <= end_date_obj:
+            date_str_yyyymmdd = current_date.strftime("%Y%m%d")
+            study_time_seconds = self.study_times.get(date_str_yyyymmdd, 0)
+            color = self._get_color_for_study_time(study_time_seconds)
+            self.heatmap_data.append((current_date, color, study_time_seconds))
+            current_date += timedelta(days=1)
+
+        for _ in range(back_empty_days):
+            self.heatmap_data.append((None, 'empty', 0)) # placeholder for empty cell
+        
+        self.svg_params['total_days_in_year'] = total_days_in_year # For clarity, though not directly used in SVG dims
+
+    def _calculate_svg_dimensions(self):
+        """
+        Calculates SVG dimensions, cell sizes, margins, and other rendering parameters.
+        """
+        if not self.heatmap_data:
+            self._prepare_heatmap_layout_data() # Ensure data is ready
+
+        self.svg_params['cell_size'] = 12
+        self.svg_params['spacing'] = 3
+        self.svg_params['weeks'] = len(self.heatmap_data) // 7
+        self.svg_params['rows'] = 7 # Days in a week (Sunday to Saturday)
+
+        self.svg_params['margin_top'] = 30  # For month labels
+        self.svg_params['margin_left'] = 35 # For day labels
+        
+        self.svg_params['width'] = (
+            self.svg_params['margin_left'] + 
+            self.svg_params['weeks'] * (self.svg_params['cell_size'] + self.svg_params['spacing']) - 
+            self.svg_params['spacing'] # No trailing spacing for width
+        )
+        self.svg_params['height'] = (
+            self.svg_params['margin_top'] + 
+            self.svg_params['rows'] * (self.svg_params['cell_size'] + self.svg_params['spacing']) - 
+            self.svg_params['spacing'] # No trailing spacing for height
+        )
+
+    def _generate_svg_header(self):
+        """Generates the opening SVG tag."""
+        return f'<svg xmlns="http://www.w3.org/2000/svg" width="{self.svg_params["width"]}" height="{self.svg_params["height"]}" style="font-family: Arial, sans-serif;">'
+
+    def _generate_day_labels_svg(self):
+        """Generates SVG for day labels (Mon, Wed, Fri)."""
+        svg_elements = []
+        # Display labels for Mon, Wed, Fri (indices 1, 3, 5 assuming Sun=0)
+        day_labels_display = {1: 'Mon', 3: 'Wed', 5: 'Fri'} 
+        for i in range(self.svg_params['rows']): # 0=Sun, 1=Mon...
+            if i in day_labels_display:
+                y_pos = (
+                    self.svg_params['margin_top'] + 
+                    i * (self.svg_params['cell_size'] + self.svg_params['spacing']) + 
+                    self.svg_params['cell_size'] - 2 # Align with top of cells
+                )
+                svg_elements.append(f'<text x="0" y="{y_pos}" font-size="10px" fill="#767676" alignment-baseline="middle">{day_labels_display[i]}</text>')
+        return svg_elements
+
+    def _generate_month_labels_svg(self):
+        """Generates SVG for month labels."""
+        svg_elements = []
+        month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        last_month_drawn = -1 # 0-11 index of the last month label drawn
+        
+        for week_idx in range(self.svg_params['weeks']):
+            # Find the first actual date in this column to determine the month
+            actual_date_in_col = None
+            for day_in_week_idx in range(self.svg_params['rows']): # 0..6 for Sun..Sat
+                heatmap_data_idx = week_idx * self.svg_params['rows'] + day_in_week_idx
+                if heatmap_data_idx < len(self.heatmap_data) and self.heatmap_data[heatmap_data_idx][0] is not None:
+                    actual_date_in_col = self.heatmap_data[heatmap_data_idx][0]
+                    break # Found the first valid date object in this column
+            
+            if actual_date_in_col:
+                current_month_idx = actual_date_in_col.month - 1 # 0-11
+                # Draw month label if it's a new month and it's early in the month or the first column
+                if current_month_idx != last_month_drawn:
+                    if actual_date_in_col.day < 8 or week_idx == 0 : # Heuristic: show if first week of month or first col
+                        x_pos = (
+                            self.svg_params['margin_left'] + 
+                            week_idx * (self.svg_params['cell_size'] + self.svg_params['spacing'])
+                        )
+                        svg_elements.append(f'<text x="{x_pos}" y="{self.svg_params["margin_top"] - 10}" font-size="10px" fill="#767676">{month_names[current_month_idx]}</text>')
+                        last_month_drawn = current_month_idx
+        return svg_elements
+
+    def _generate_data_cells_svg(self):
+        """Generates SVG for each data cell (rectangles) in the heatmap."""
+        svg_elements = []
+        for i, (date_obj, color, study_time_seconds) in enumerate(self.heatmap_data):
+            col_idx = i // self.svg_params['rows']  # Week index
+            row_idx = i % self.svg_params['rows']   # Day index (0=Sunday, ..., 6=Saturday)
+
+            x_pos = (
+                self.svg_params['margin_left'] + 
+                col_idx * (self.svg_params['cell_size'] + self.svg_params['spacing'])
+            )
+            y_pos = (
+                self.svg_params['margin_top'] + 
+                row_idx * (self.svg_params['cell_size'] + self.svg_params['spacing'])
+            )
+
+            if date_obj is not None: # Actual data cell, not an empty padding cell
+                duration_str = self._time_format_duration(study_time_seconds)
+                title_text = f"{date_obj.strftime('%Y-%m-%d')}: {duration_str}"
+                svg_elements.append(f'  <rect width="{self.svg_params["cell_size"]}" height="{self.svg_params["cell_size"]}" x="{x_pos}" y="{y_pos}" fill="{color}" rx="2" ry="2">')
+                svg_elements.append(f'    <title>{title_text}</title>')
+                svg_elements.append(f'  </rect>')
+            # Optionally, draw empty padding cells with a different style if desired
+            # else:
+            #   svg_elements.append(f'<rect width="{self.svg_params["cell_size"]}" height="{self.svg_params["cell_size"]}" x="{x_pos}" y="{y_pos}" fill="#ebedf0" rx="2" ry="2" opacity="0.3"/>')
+        return svg_elements
+
+    def generate_html_output(self, output_filename):
+        """
+        Orchestrates the generation of the full heatmap SVG,
+        embeds it in an HTML structure, and writes it to the specified file.
+        """
+        self._prepare_heatmap_layout_data()
+        self._calculate_svg_dimensions()
+
+        svg_components = []
+        svg_components.append(self._generate_svg_header())
+        svg_components.extend(self._generate_day_labels_svg())
+        svg_components.extend(self._generate_month_labels_svg())
+        svg_components.extend(self._generate_data_cells_svg())
+        svg_components.append('</svg>')
+
+        full_svg_content = '\n'.join(svg_components)
+
+        html_content = f"""
     <!DOCTYPE html>
     <html>
     <head>
         <meta charset="UTF-8">
-        <title>Study Heatmap {year}</title>
+        <title>Study Heatmap {self.year}</title>
         <style>
             body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"; }}
             .heatmap-container {{
@@ -172,16 +245,16 @@ def generate_heatmap(conn, year, output_file):
                 border-radius: 6px;
                 background-color: #ffffff; /* Or #0d1117 for dark mode if adaptable */
             }}
-             h2 {{ margin-left: 35px; font-weight: 400; color: #24292f;}}
+             h2 {{ margin-left: {self.svg_params.get('margin_left', 35)}px; font-weight: 400; color: #24292f;}}
         </style>
     </head>
     <body>
         <div class="heatmap-container">
-        <h2>Study Activity for {year}</h2>
-        {''.join(svg)}
+        <h2>Study Activity for {self.year}</h2>
+        {full_svg_content}
         </div>
     </body>
     </html>
     """
-    with open(output_file, 'w', encoding='utf-8') as f:
-        f.write(html)
+        with open(output_filename, 'w', encoding='utf-8') as f:
+            f.write(html_content)
