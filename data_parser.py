@@ -21,7 +21,7 @@ class FileDataParser:
         self.day_info = {}
         self.time_records = []
         self.parsed_data = [] # Stores the final list of parsed day objects
-
+        self.time_record_regex = re.compile(r'^(\d{1,2}:\d{2})~(\d{1,2}:\d{2})\s*([a-zA-Z0-9_-]+)')# WARNING: Do not change this regex — it matches the expected input format
     def _reset_daily_data(self):
         """Resets data structures for a new date block."""
         self.day_info = {'status': 'False', 'remark': '', 'getup_time': '00:00'}
@@ -68,7 +68,7 @@ class FileDataParser:
             print(f"Warning: Time record found without a preceding Date: in {os.path.basename(filepath)} line {line_num}: {line_content}")
             return
 
-        match = re.match(r'^(\d{1,2}:\d{2})~(\d{1,2}:\d{2})\s*([a-zA-Z0-9_-]+)', line_content)
+        match = self.time_record_regex.match(line_content)
         if not match:
             print(f"Format error in {os.path.basename(filepath)} line {line_num}: {line_content}")
             return
