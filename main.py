@@ -3,7 +3,7 @@ import os
 import re
 import time
 import data_parser as dp
-import database_importer as di # Import the new database importer
+import database_importer as di
 import database_querier as dq
 import heatmap_generator as hg
 
@@ -26,14 +26,12 @@ def handle_menu_choice(choice, conn):
         input_path = input("Enter the path to a .txt file or a directory: ").strip().strip('"')
         input_path = os.path.normpath(input_path)
         start_time = time.time()
-        # The core logic is now a two-step process: Parse, then Import.
+        
         def process_and_import(filepath):
             print(f"Parsing file: {filepath}")
-            # Step 1: Parse the file to get the intermediate data structure.
             parsed_data = dp.parse_file(filepath)
             
             if parsed_data:
-                # Step 2: Import the structured data into the database.
                 print(f"Importing data from {os.path.basename(filepath)} into database...")
                 di.import_to_db(conn, parsed_data)
                 return True
@@ -59,9 +57,11 @@ def handle_menu_choice(choice, conn):
                 print(f"No .txt files found or successfully processed in {input_path}")
         else:
             print(f"Error: Invalid path. Please provide a valid .txt file or directory: {input_path}")
+        
         end_time = time.time()
         elapsed_time = end_time - start_time
         print(f"Time taken for processing: {elapsed_time:.2f} seconds")
+
     elif choice == '1': 
         date_str = input("Enter date (YYYYMMDD): ")
         if re.match(r'^\d{8}$', date_str): 
@@ -85,8 +85,15 @@ def handle_menu_choice(choice, conn):
         if re.match(r'^\d{4}$', year_str):
             year = int(year_str)
             output_file = f"study_heatmap_{year}.html"
-            generator = hg.HeatmapGenerator(conn, year)
+            
+            # Step 1: Fetch data from the database.
+            fetcher = hg.HeatmapDataFetcher(conn)
+            study_data = fetcher.fetch_yearly_study_times(year)
+            
+            # Step 2: Generate the heatmap using the fetched data.
+            generator = hg.HeatmapGenerator(year, study_data)
             generator.generate_html_output(output_file)
+            
             print(f"Study heatmap generated: {output_file}")
         else:
             print("Invalid year format. Please use YYYY.")
@@ -107,7 +114,6 @@ def handle_menu_choice(choice, conn):
     return True
 
 def main():
-    # Initialize DB connection using the new importer module
     conn = di.init_db()
 
     try:
@@ -117,8 +123,9 @@ def main():
             if not handle_menu_choice(choice, conn):
                 break
     finally:
-        conn.close()
-        print("Database connection closed.")
+        if conn:
+            conn.close()
+            print("Database connection closed.")
 
 if __name__ == '__main__':
     main()
