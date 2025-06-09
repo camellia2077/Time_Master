@@ -16,8 +16,9 @@ from database_inserter import db_connection, insert_data_stream, create_database
 
 def handle_import():
     """
-    Orchestrates the import process. This version suppresses detailed parser logs
-    and only prints the final count of successful and failed files.
+    Orchestrates the import process with high-precision timing for parsing and database insertion.
+    This version suppresses detailed parser logs and only prints the final count and timing details.
+    --- MODIFIED: Correctly times the generator-based parser by materializing it into a list. ---
     """
     path = input("请输入要导入的txt文件或文件夹路径(输入0返回):").strip()
     if path == '0':
@@ -51,40 +52,80 @@ def handle_import():
 
     processed_count = 0
     total_files_to_process = len(files_to_process)
+    
+    # --- 计时变量初始化 ---
+    total_parse_time = 0.0
+    total_db_time = 0.0
+    # 记录整体操作的开始时间
+    total_operation_start_time = time.perf_counter()
 
     try:
-        with db_connection() as conn:  # Start a single transaction for all files
+        with db_connection() as conn:  # 为所有文件启动一个事务
             for file_path_item in files_to_process:
                 try:
-                    # The block below captures and hides any print statements
-                    # from the parse_bill_file function.
+                    # --- 计时：文本解析 ---
+                    parse_start_time = time.perf_counter()
+                    
+                    # 抑制解析器的打印输出
                     original_stdout = sys.stdout
                     original_stderr = sys.stderr
-                    sys.stdout = StringIO() # Redirect standard output to a dummy buffer
-                    sys.stderr = StringIO() # Redirect standard error to a dummy buffer
-                    
+                    sys.stdout = StringIO()
+                    sys.stderr = StringIO()
                     try:
-                        # Call the parser. Its output will be captured, not displayed.
-                        data_stream = parse_bill_file(file_path_item)
+                        # --- CHANGE: Force generator execution by converting to a list ---
+                        # This materializes all records from the file into memory,
+                        # allowing for an accurate measurement of the parsing time.
+                        records_list = list(parse_bill_file(file_path_item))
                     finally:
-                        # Always restore the original output streams
                         sys.stdout = original_stdout
                         sys.stderr = original_stderr
+                        
+                    parse_end_time = time.perf_counter()
+                    total_parse_time += (parse_end_time - parse_start_time)
 
-                    insert_data_stream(conn, data_stream)
+                    # --- 计时：数据库插入 ---
+                    db_start_time = time.perf_counter()
+                    
+                    # --- CHANGE: Pass the materialized list to the inserter ---
+                    insert_data_stream(conn, records_list)
+
+                    db_end_time = time.perf_counter()
+                    total_db_time += (db_end_time - db_start_time)
+                    
                     processed_count += 1
                 except (ValueError, Exception):
-                    # If any file fails, re-raise the exception to trigger a full rollback
+                    # 重新抛出异常以触发外部事务回滚
                     raise
         
-        # This code runs only if all files are processed without error
+        # 此代码块仅在所有文件都成功处理后运行
+        total_operation_end_time = time.perf_counter()
+        total_duration = total_operation_end_time - total_operation_start_time
+
+        print(f"\n{GREEN}===== 导入完成 ====={RESET}")
         print(f"成功导入文件数: {processed_count}")
         print(f"失败导入文件数: 0")
-
-    except Exception:
-        # This code runs if an exception was raised, causing the transaction to roll back.
+        print("--------------------")
+        print("计时统计:")
+        # MODIFICATION START
+        print(f"  - 总耗时: {total_duration:.4f} 秒 ({total_duration * 1000:.2f} ms)")
+        print(f"  - 文本解析总耗时: {total_parse_time:.4f} 秒 ({total_parse_time * 1000:.2f} ms)")
+        print(f"  - 数据库插入总耗时: {total_db_time:.4f} 秒 ({total_db_time * 1000:.2f} ms)")
+        # MODIFICATION END
+        
+    except Exception as e:
+        # 如果发生异常导致事务回滚，此代码块将运行
+        total_operation_end_time = time.perf_counter()
+        total_duration = total_operation_end_time - total_operation_start_time
+        
+        print(f"\n{RED}===== 导入失败 ====={RESET}")
         print(f"成功导入文件数: 0")
         print(f"失败导入文件数: {total_files_to_process}")
+        print(f"操作因错误中止。错误详情: {e}")
+        print("--------------------")
+        print("计时统计:")
+        # MODIFICATION START
+        print(f"操作中止前总耗时: {total_duration:.4f} 秒 ({total_duration * 1000:.2f} ms)")
+        # MODIFICATION END
 
 
 def main_app_loop():
